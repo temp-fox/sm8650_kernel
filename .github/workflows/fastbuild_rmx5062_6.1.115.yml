@@ -139,7 +139,7 @@ jobs:
           sudo apt purge -y man-db || true
           sudo rm -rf /var/lib/man-db/auto-update
           sudo apt update
-          sudo apt-get install -y --no-install-recommends aria2 binutils python-is-python3 libssl-dev libelf-dev unzip zip ccache zstd pahole dwarves
+          sudo apt-get install -y --no-install-recommends aria2 binutils python-is-python3 libssl-dev libelf-dev unzip zip ccache zstd lz4 pahole dwarves
 
           echo "正在安装 ccache-ECS..."
           cp "${{ github.workspace }}/lib/ccache-x86-64" ccache
@@ -676,8 +676,9 @@ jobs:
           git clone https://github.com/cctv18/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           cd AnyKernel3
-          cp ../common/out/arch/arm64/boot/Image ./Image
-          test -f ./Image
+          lz4 -l -12 --favor-decSpeed -f ../common/out/arch/arm64/boot/Image ./Image.lz4
+          test -f ./Image.lz4
+          # RMX5062 stock boot 的 kernel 为 LZ4 legacy 压缩格式，包内只保留 Image.lz4，避免 AnyKernel3 优先写入裸 Image。
 
           if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             KSU_TYPENAME="SukiSU"
