@@ -254,8 +254,27 @@ jobs:
           if [[ ! -L common/kernel/locking/locking_main.h ]]; then
             cp vendor/oplus/kernel/synchronize/oplus_locking.h common/kernel/locking/locking_main.h
           fi
+          cp vendor/oplus/kernel/synchronize/oplus_locking.h common/kernel/locking/oplus_locking.h
           if [[ ! -L common/kernel/locking/oplus_locking.c ]]; then
             cp vendor/oplus/kernel/synchronize/oplus_locking.c common/kernel/locking/oplus_locking.c
+          fi
+
+          echo "正在补齐 RMX5062 官方源码缺失的 Oplus mm trace 空实现..."
+          # mm/mm-trace.h 指向 ../../vendor/oplus/kernel/mm/mm_osvelte/mm-trace.h；vmscan.c 只需要这些 trace 接口存在。
+          mkdir -p vendor/oplus/kernel/mm/mm_osvelte
+          cat > vendor/oplus/kernel/mm/mm_osvelte/mm-trace.h <<'EOF'
+          /* SPDX-License-Identifier: GPL-2.0 */
+          #ifndef _OPLUS_MM_TRACE_H
+          #define _OPLUS_MM_TRACE_H
+
+          #define mm_trace_int64(name, value) do { } while (0)
+          #define mm_trace_fmt_begin(fmt, ...) do { } while (0)
+          #define mm_trace_fmt_end() do { } while (0)
+
+          #endif
+          EOF
+          if [[ ! -L common/mm/mm-trace.h ]]; then
+            cp vendor/oplus/kernel/mm/mm_osvelte/mm-trace.h common/mm/mm-trace.h
           fi
 
           echo "正在下载 llvm-Clang20 工具链..."
