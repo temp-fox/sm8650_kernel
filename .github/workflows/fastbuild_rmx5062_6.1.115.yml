@@ -178,7 +178,8 @@ jobs:
             : > "$vendor_target/Kconfig"
             : > "$vendor_target/Makefile"
             if [[ -L "$in_tree" ]]; then
-              echo "检测到 $in_tree 是 symlink，保留并使用 vendor 目标占位。"
+              echo "检测到 $in_tree 是 symlink，目标为：$(readlink "$in_tree")"
+              echo "已补齐 symlink 目标占位：$vendor_target"
             else
               if [[ -e "$in_tree" && ! -d "$in_tree" ]]; then
                 echo "检测到 $in_tree 是普通文件占位，内容如下："
@@ -190,8 +191,9 @@ jobs:
               : > "$in_tree/Makefile"
             fi
           }
-          prepare_oplus_placeholder "common/drivers/soc/oplus/oplus_resctrl" "common/vendor/oplus/kernel/oplus_performance/oplus_resctrl" "oplus_resctrl"
-          prepare_oplus_placeholder "common/drivers/soc/oplus/storage" "common/vendor/oplus/kernel/storage" "oplus_storage"
+          # drivers/soc/oplus/* 的源码占位目标形如 ../../../../vendor/...，从 common/drivers/soc/oplus 解析后位于 kernel_workspace/vendor/...。
+          prepare_oplus_placeholder "common/drivers/soc/oplus/oplus_resctrl" "vendor/oplus/kernel/oplus_performance/oplus_resctrl" "oplus_resctrl"
+          prepare_oplus_placeholder "common/drivers/soc/oplus/storage" "vendor/oplus/kernel/storage" "oplus_storage"
 
           echo "正在下载 llvm-Clang20 工具链..."
           mkdir -p clang20
