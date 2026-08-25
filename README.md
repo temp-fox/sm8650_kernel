@@ -22,6 +22,7 @@
 ## 已实现：
 - [x] 欧加真 SM8650 通用OKI内核（基于一加12 6.1.57/6.1.75/6.1.118 官方内核源码，其他同内核版本非SM8650机型可自行测试，部分机型可完全兼容）
 - [x] 欧加真 MT6989 通用OKI内核（基于一加Ace5竞速版 6.1.115 官方内核源码，其他同内核版本非MT6989机型可自行测试，部分机型可完全兼容）
+- [x] realme Neo7 Turbo / RMX5062 官方源码 OKI 内核（基于 realme-kernel-opensource/realme_neo7_turbo-AndroidV-kernel-source，专用 workflow：`fastbuild_rmx5062_6.1.115.yml`）
 - [x] 欧加真 MT6897 通用OKI内核（基于一加平板 6.1.128 官方内核源码，其他同内核版本非MT6897机型可自行测试，部分机型可完全兼容）
 - [x] ReSukiSU/SukiSU Ultra/KernelSU Next/原版KernelSU多版本KSU可选
 - [x] 引入独家设计的 [ccache-ECS](https://github.com/cctv18/ccache-ECS) 缓存及大量编译流程优化，编译时间可稳定在约6min *(首次编译时会拉取公共预置ccache，从第二次开始没有大量配置改动的情况下，单次编译时间约6min；距离上一次调用两周未调用后缓存会被自动清除，此时编译会自动重建缓存)*
@@ -35,6 +36,17 @@
 - [x] 添加了对[Mountify](https://github.com/backslashxx/mountify)模块的支持
 - [x] 加入Re:Kernel支持，与Freezer，NoActive等软件配合降低功耗
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
+
+## realme Neo7 Turbo / RMX5062 专用构建
+
+新增 workflow：`.github/workflows/fastbuild_rmx5062_6.1.115.yml`。
+
+该 workflow 使用 realme 官方开源仓库 `realme-kernel-opensource/realme_neo7_turbo-AndroidV-kernel-source` 的 `master` 分支，目标设备为 realme Neo7 Turbo / RMX5062 / RE602EL1，内核线为 `6.1.115-android14-11-o-gbc8558aaf2a5`。
+
+产物形式与本项目其他 workflow 保持一致：输出 AnyKernel3 可刷 zip，不输出完整 `boot.img`。刷入前请务必备份当前槽位 `boot`，并保留 stock `init_boot`、`vendor_boot`、`dtbo`、`vbmeta` 等救砖镜像。
+
+建议首次运行时先关闭 Droidspaces、LZ4/LZ4KD、SSG、Re-Kernel、基带保护等附加项，仅验证官方源码 baseline 能否编译并产出 artifact；baseline 成功后再选择 `droidspaces_enable=standard` 构建 Droidspaces 版本。不建议首次直接使用 `extend`。
+
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
 - [ ] Nethunter 网卡监听模式支持
