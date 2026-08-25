@@ -168,7 +168,12 @@ jobs:
           echo "官方源码 Makefile 版本："
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' common/Makefile || true
 
-          echo "正在补齐 RMX5062 官方源码缺失的 Oplus vendor Kconfig 占位..."
+          echo "正在补齐 RMX5062 官方源码缺失的 Oplus resctrl Kconfig 占位..."
+          # 官方 zip 缺少 Oplus vendor 目标文件，且 drivers/soc/Kconfig 使用硬 source 打开 in-tree 路径。
+          # 同时补齐 source 实际读取路径和 vendor symlink 目标路径，避免 gki_defconfig 在 Kconfig 解析阶段中断。
+          mkdir -p common/drivers/soc/oplus/oplus_resctrl
+          : > common/drivers/soc/oplus/oplus_resctrl/Kconfig
+          : > common/drivers/soc/oplus/oplus_resctrl/Makefile
           mkdir -p common/vendor/oplus/kernel/oplus_performance/oplus_resctrl
           : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Kconfig
           : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Makefile
