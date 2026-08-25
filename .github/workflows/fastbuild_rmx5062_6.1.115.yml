@@ -197,6 +197,67 @@ jobs:
           # Kconfig.ext 会硬 source kernel/oplus_cpu/Kconfig；kernel/oplus_cpu 指向 ../../vendor/oplus/kernel/cpu。
           prepare_oplus_placeholder "common/kernel/oplus_cpu" "vendor/oplus/kernel/cpu" "oplus_cpu"
 
+          echo "正在补齐 RMX5062 官方源码缺失的 Oplus locking 空实现..."
+          # kernel/locking/locking_main.h 与 oplus_locking.c 指向 ../../../vendor/oplus/kernel/synchronize/。
+          # 主线 locking/sched 代码会硬引用这些 Oplus hook；baseline 构建中用 no-op 实现保持原流程继续编译。
+          mkdir -p vendor/oplus/kernel/synchronize
+          cat > vendor/oplus/kernel/synchronize/oplus_locking.h <<'EOF'
+          /* SPDX-License-Identifier: GPL-2.0 */
+          #ifndef _OPLUS_LOCKING_H
+          #define _OPLUS_LOCKING_H
+
+          struct task_struct;
+
+          static inline void locking_record_switch_in_cs(struct task_struct *task) { }
+
+          #endif
+          EOF
+          cat > vendor/oplus/kernel/synchronize/oplus_locking.c <<'EOF'
+          // SPDX-License-Identifier: GPL-2.0
+          #include <linux/export.h>
+          #include <linux/types.h>
+
+          #include "oplus_locking.h"
+
+          struct mutex;
+          struct percpu_rw_semaphore;
+          struct rt_mutex_base;
+          struct rw_semaphore;
+          struct task_struct;
+
+          void android_vh_pcpu_rwsem_handler(u64 sem, struct task_struct *tsk,
+                                             unsigned long jiffies) { }
+          EXPORT_SYMBOL_GPL(android_vh_pcpu_rwsem_handler);
+
+          void mutex_lock_handler(u64 lock, struct task_struct *tsk, unsigned long jiffies) { }
+          EXPORT_SYMBOL_GPL(mutex_lock_handler);
+
+          void rwsem_lock_handler(u64 sem, struct task_struct *tsk, unsigned long jiffies) { }
+          EXPORT_SYMBOL_GPL(rwsem_lock_handler);
+
+          void mutex_wait_handler(struct mutex *lock) { }
+          EXPORT_SYMBOL_GPL(mutex_wait_handler);
+
+          void rwsem_read_wait_handler(struct rw_semaphore *sem) { }
+          EXPORT_SYMBOL_GPL(rwsem_read_wait_handler);
+
+          void pcp_wait_handler(struct percpu_rw_semaphore *sem, bool is_reader, int phase) { }
+          EXPORT_SYMBOL_GPL(pcp_wait_handler);
+
+          void rtmutex_lock_handler(u64 lock, struct task_struct *tsk,
+                                    unsigned long jiffies) { }
+          EXPORT_SYMBOL_GPL(rtmutex_lock_handler);
+
+          void rtmutex_wait_handler(struct rt_mutex_base *lock) { }
+          EXPORT_SYMBOL_GPL(rtmutex_wait_handler);
+          EOF
+          if [[ ! -L common/kernel/locking/locking_main.h ]]; then
+            cp vendor/oplus/kernel/synchronize/oplus_locking.h common/kernel/locking/locking_main.h
+          fi
+          if [[ ! -L common/kernel/locking/oplus_locking.c ]]; then
+            cp vendor/oplus/kernel/synchronize/oplus_locking.c common/kernel/locking/oplus_locking.c
+          fi
+
           echo "正在下载 llvm-Clang20 工具链..."
           mkdir -p clang20
           aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang20-r547379/clang-r547379.zip -o clang.zip
