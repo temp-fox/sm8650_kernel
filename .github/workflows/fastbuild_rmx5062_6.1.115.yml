@@ -1,4 +1,4 @@
-name: RMX5062 realme Neo7 Turbo 6.1.115 官方OKI内核快速构建
+name: 6.1.115 realme Neo7 Turbo 官方内核特供
 
 env:
   TZ: Asia/Shanghai
