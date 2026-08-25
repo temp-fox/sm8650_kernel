@@ -169,14 +169,16 @@ jobs:
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' common/Makefile || true
 
           echo "正在补齐 RMX5062 官方源码缺失的 Oplus resctrl Kconfig 占位..."
-          # 官方 zip 缺少 Oplus vendor 目标文件，且 drivers/soc/Kconfig 使用硬 source 打开 in-tree 路径。
-          # 同时补齐 source 实际读取路径和 vendor symlink 目标路径，避免 gki_defconfig 在 Kconfig 解析阶段中断。
-          mkdir -p common/drivers/soc/oplus/oplus_resctrl
-          : > common/drivers/soc/oplus/oplus_resctrl/Kconfig
-          : > common/drivers/soc/oplus/oplus_resctrl/Makefile
+          # 官方 zip 中 drivers/soc/oplus/oplus_resctrl 可能是指向 vendor 的 symlink；先补齐目标路径。
+          # 若 in-tree 路径不是 symlink，再补一个本地占位，避免 gki_defconfig 在硬 source 阶段中断。
           mkdir -p common/vendor/oplus/kernel/oplus_performance/oplus_resctrl
           : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Kconfig
           : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Makefile
+          if [[ ! -L common/drivers/soc/oplus/oplus_resctrl ]]; then
+            mkdir -p common/drivers/soc/oplus/oplus_resctrl
+            : > common/drivers/soc/oplus/oplus_resctrl/Kconfig
+            : > common/drivers/soc/oplus/oplus_resctrl/Makefile
+          fi
 
           echo "正在下载 llvm-Clang20 工具链..."
           mkdir -p clang20
