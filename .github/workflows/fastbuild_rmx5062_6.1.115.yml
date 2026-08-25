@@ -194,6 +194,8 @@ jobs:
           # drivers/soc/oplus/* 的源码占位目标形如 ../../../../vendor/...，从 common/drivers/soc/oplus 解析后位于 kernel_workspace/vendor/...。
           prepare_oplus_placeholder "common/drivers/soc/oplus/oplus_resctrl" "vendor/oplus/kernel/oplus_performance/oplus_resctrl" "oplus_resctrl"
           prepare_oplus_placeholder "common/drivers/soc/oplus/storage" "vendor/oplus/kernel/storage" "oplus_storage"
+          # Kconfig.ext 会硬 source kernel/oplus_cpu/Kconfig；kernel/oplus_cpu 指向 ../../vendor/oplus/kernel/cpu。
+          prepare_oplus_placeholder "common/kernel/oplus_cpu" "vendor/oplus/kernel/cpu" "oplus_cpu"
 
           echo "正在下载 llvm-Clang20 工具链..."
           mkdir -p clang20
