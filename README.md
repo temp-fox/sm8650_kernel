@@ -45,7 +45,7 @@
 
 产物形式与本项目其他 workflow 保持一致：输出 AnyKernel3 可刷内容，不输出完整 `boot.img`。从 GitHub Actions 的 Artifacts 下载时，GitHub 会自动套一层 artifact zip；解压该 artifact 后应直接看到 `META-INF/`、`anykernel.sh`、`Image` 等 AnyKernel3 根目录文件，不再内套第二层刷机 zip。若启用 Release，则 Release 附件仍是标准 AnyKernel3 `.zip`。刷入前请务必备份当前槽位 `boot`，并保留 stock `init_boot`、`vendor_boot`、`dtbo`、`vbmeta` 等救砖镜像。
 
-建议首次运行时先关闭 Droidspaces、LZ4/LZ4KD、SSG、Re-Kernel、基带保护等附加项，仅验证官方源码 baseline 能否编译并产出 artifact；baseline 成功后再选择 `droidspaces_enable=standard` 构建 Droidspaces 版本。不建议首次直接使用 `extend`。
+建议首次运行时先关闭 Droidspaces、LZ4/LZ4KD、SSG、Re-Kernel、基带保护等附加项，仅验证官方源码 baseline 能否编译并产出 artifact；baseline 成功后再选择 `droidspaces_enable=standard` 构建 Droidspaces 版本。不建议首次直接使用 `extend`。RMX5062 的 Droidspaces 配置已包含 `CONFIG_USER_NS=y`，用于补齐 Droidspaces v6.5.0 检查中的 User namespace。
 
 ## 待实现：
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
