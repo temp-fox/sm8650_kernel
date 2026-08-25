@@ -716,6 +716,7 @@ jobs:
           FULL_VERSION="${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${FINAL_SUFFIX}"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
+          echo "ak3dir=kernel_workspace/AnyKernel3" >> $GITHUB_OUTPUT
           echo "full_version=$FULL_VERSION" >> $GITHUB_OUTPUT
           echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_ENV
 
@@ -754,10 +755,20 @@ jobs:
           path: ${{ github.workspace }}/kernel_workspace/ccache.log
           if-no-files-found: warn
 
-      - name: 上传 ZIP 工件
+      - name: 上传 AnyKernel3 一层工件
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.create_zip.outputs.ak3name }}
+          path: |
+            ${{ github.workspace }}/${{ steps.create_zip.outputs.ak3dir }}/*
+            !${{ github.workspace }}/${{ steps.create_zip.outputs.ak3dir }}/.git/**
+          if-no-files-found: error
+
+      - name: 上传 Release 专用 ZIP 工件
+        if: inputs.release_enable
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.create_zip.outputs.ak3name }}
           path: ${{ github.workspace }}/kernel_workspace/${{ steps.create_zip.outputs.ak3name }}
           if-no-files-found: error
 
@@ -773,7 +784,7 @@ jobs:
       - name: 下载 ZIP 工件
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build.outputs.ak3name }}
+          name: release-${{ needs.build.outputs.ak3name }}
           path: ./release_zips
 
       - name: 设置环境变量
