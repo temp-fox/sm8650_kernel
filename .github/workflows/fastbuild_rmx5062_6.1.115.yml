@@ -168,26 +168,30 @@ jobs:
           echo "官方源码 Makefile 版本："
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' common/Makefile || true
 
-          echo "正在补齐 RMX5062 官方源码缺失的 Oplus resctrl Kconfig 占位..."
-          # 本源码归档中 drivers/soc/oplus/oplus_resctrl 可能不是目录，而是保存 symlink 目标的普通文件。
-          # Kconfig 会硬 source drivers/soc/oplus/oplus_resctrl/Kconfig，因此普通文件占位必须替换成目录占位。
-          RESCTRL_IN_TREE="common/drivers/soc/oplus/oplus_resctrl"
-          RESCTRL_VENDOR="common/vendor/oplus/kernel/oplus_performance/oplus_resctrl"
-          mkdir -p "$RESCTRL_VENDOR"
-          : > "$RESCTRL_VENDOR/Kconfig"
-          : > "$RESCTRL_VENDOR/Makefile"
-          if [[ -L "$RESCTRL_IN_TREE" ]]; then
-            echo "检测到 $RESCTRL_IN_TREE 是 symlink，保留并使用 vendor 目标占位。"
-          else
-            if [[ -e "$RESCTRL_IN_TREE" && ! -d "$RESCTRL_IN_TREE" ]]; then
-              echo "检测到 $RESCTRL_IN_TREE 是普通文件占位，内容如下："
-              cat "$RESCTRL_IN_TREE" || true
-              rm -f "$RESCTRL_IN_TREE"
+          echo "正在补齐 RMX5062 官方源码缺失的 Oplus Kconfig 占位..."
+          prepare_oplus_placeholder() {
+            local in_tree="$1"
+            local vendor_target="$2"
+            local name="$3"
+            echo "处理 $name: $in_tree -> $vendor_target"
+            mkdir -p "$vendor_target"
+            : > "$vendor_target/Kconfig"
+            : > "$vendor_target/Makefile"
+            if [[ -L "$in_tree" ]]; then
+              echo "检测到 $in_tree 是 symlink，保留并使用 vendor 目标占位。"
+            else
+              if [[ -e "$in_tree" && ! -d "$in_tree" ]]; then
+                echo "检测到 $in_tree 是普通文件占位，内容如下："
+                cat "$in_tree" || true
+                rm -f "$in_tree"
+              fi
+              mkdir -p "$in_tree"
+              : > "$in_tree/Kconfig"
+              : > "$in_tree/Makefile"
             fi
-            mkdir -p "$RESCTRL_IN_TREE"
-            : > "$RESCTRL_IN_TREE/Kconfig"
-            : > "$RESCTRL_IN_TREE/Makefile"
-          fi
+          }
+          prepare_oplus_placeholder "common/drivers/soc/oplus/oplus_resctrl" "common/vendor/oplus/kernel/oplus_performance/oplus_resctrl" "oplus_resctrl"
+          prepare_oplus_placeholder "common/drivers/soc/oplus/storage" "common/vendor/oplus/kernel/storage" "oplus_storage"
 
           echo "正在下载 llvm-Clang20 工具链..."
           mkdir -p clang20
