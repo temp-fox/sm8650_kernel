@@ -43,7 +43,7 @@
 
 该 workflow 使用 realme 官方开源仓库 `realme-kernel-opensource/realme_neo7_turbo-AndroidV-kernel-source` 的 `master` 分支，目标设备为 realme Neo7 Turbo / RMX5062 / RE602EL1，内核线为 `6.1.115-android14-11-o-gbc8558aaf2a5`。
 
-产物形式与本项目其他 workflow 保持一致：输出 AnyKernel3 可刷内容，不输出完整 `boot.img`。RMX5062 stock `boot.img` 的 kernel 段为 LZ4 legacy 压缩格式，因此 workflow 会把编译出的裸 `Image` 压缩为 `Image.lz4` 后放入 AnyKernel3，避免刷入裸 `Image` 导致早期启动失败。从 GitHub Actions 的 Artifacts 下载时，GitHub 会自动套一层 artifact zip；解压该 artifact 后应直接看到 `META-INF/`、`anykernel.sh`、`Image.lz4` 等 AnyKernel3 根目录文件，不再内套第二层刷机 zip。若启用 Release，则 Release 附件仍是标准 AnyKernel3 `.zip`。刷入前请务必备份当前槽位 `boot`，并保留 stock `init_boot`、`vendor_boot`、`dtbo`、`vbmeta` 等救砖镜像。
+产物形式与本项目其他 workflow 保持一致：输出 AnyKernel3 可刷内容，不输出完整 `boot.img`。从 GitHub Actions 的 Artifacts 下载时，GitHub 会自动套一层 artifact zip；解压该 artifact 后应直接看到 `META-INF/`、`anykernel.sh`、`Image` 等 AnyKernel3 根目录文件，不再内套第二层刷机 zip。若启用 Release，则 Release 附件仍是标准 AnyKernel3 `.zip`。刷入前请务必备份当前槽位 `boot`，并保留 stock `init_boot`、`vendor_boot`、`dtbo`、`vbmeta` 等救砖镜像。
 
 建议首次运行时先关闭 Droidspaces、LZ4/LZ4KD、SSG、Re-Kernel、基带保护等附加项，仅验证官方源码 baseline 能否编译并产出 artifact；baseline 成功后再选择 `droidspaces_enable=standard` 构建 Droidspaces 版本。不建议首次直接使用 `extend`。
 
