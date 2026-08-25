@@ -169,15 +169,24 @@ jobs:
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' common/Makefile || true
 
           echo "正在补齐 RMX5062 官方源码缺失的 Oplus resctrl Kconfig 占位..."
-          # 官方 zip 中 drivers/soc/oplus/oplus_resctrl 可能是指向 vendor 的 symlink；先补齐目标路径。
-          # 若 in-tree 路径不是 symlink，再补一个本地占位，避免 gki_defconfig 在硬 source 阶段中断。
-          mkdir -p common/vendor/oplus/kernel/oplus_performance/oplus_resctrl
-          : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Kconfig
-          : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Makefile
-          if [[ ! -L common/drivers/soc/oplus/oplus_resctrl ]]; then
-            mkdir -p common/drivers/soc/oplus/oplus_resctrl
-            : > common/drivers/soc/oplus/oplus_resctrl/Kconfig
-            : > common/drivers/soc/oplus/oplus_resctrl/Makefile
+          # 本源码归档中 drivers/soc/oplus/oplus_resctrl 可能不是目录，而是保存 symlink 目标的普通文件。
+          # Kconfig 会硬 source drivers/soc/oplus/oplus_resctrl/Kconfig，因此普通文件占位必须替换成目录占位。
+          RESCTRL_IN_TREE="common/drivers/soc/oplus/oplus_resctrl"
+          RESCTRL_VENDOR="common/vendor/oplus/kernel/oplus_performance/oplus_resctrl"
+          mkdir -p "$RESCTRL_VENDOR"
+          : > "$RESCTRL_VENDOR/Kconfig"
+          : > "$RESCTRL_VENDOR/Makefile"
+          if [[ -L "$RESCTRL_IN_TREE" ]]; then
+            echo "检测到 $RESCTRL_IN_TREE 是 symlink，保留并使用 vendor 目标占位。"
+          else
+            if [[ -e "$RESCTRL_IN_TREE" && ! -d "$RESCTRL_IN_TREE" ]]; then
+              echo "检测到 $RESCTRL_IN_TREE 是普通文件占位，内容如下："
+              cat "$RESCTRL_IN_TREE" || true
+              rm -f "$RESCTRL_IN_TREE"
+            fi
+            mkdir -p "$RESCTRL_IN_TREE"
+            : > "$RESCTRL_IN_TREE/Kconfig"
+            : > "$RESCTRL_IN_TREE/Makefile"
           fi
 
           echo "正在下载 llvm-Clang20 工具链..."
