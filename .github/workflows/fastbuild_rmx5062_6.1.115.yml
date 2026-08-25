@@ -168,6 +168,11 @@ jobs:
           echo "官方源码 Makefile 版本："
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' common/Makefile || true
 
+          echo "正在补齐 RMX5062 官方源码缺失的 Oplus vendor Kconfig 占位..."
+          mkdir -p common/vendor/oplus/kernel/oplus_performance/oplus_resctrl
+          : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Kconfig
+          : > common/vendor/oplus/kernel/oplus_performance/oplus_resctrl/Makefile
+
           echo "正在下载 llvm-Clang20 工具链..."
           mkdir -p clang20
           aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang20-r547379/clang-r547379.zip -o clang.zip
