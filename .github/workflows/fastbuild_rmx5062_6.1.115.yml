@@ -18,10 +18,10 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认ReSukiSU)'
+        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/无内置KSU,默认SukiSU Ultra)'
         required: true
         type: choice
-        default: 'resukisu'
+        default: 'sukisu'
         options:
           - 'resukisu'
           - 'sukisu'
@@ -29,25 +29,25 @@ on:
           - 'ksu'
           - 'none'
       susfs_enable:
-        description: '是否开启susfs(建议先用 baseline 验证源码能编译，再开启)'
+        description: '是否开启susfs(默认开启，按 RMX5062 手动运行配置)'
         required: true
         type: boolean
         default: true
       kpm_enable:
-        description: '是否开启kpm(使用KpatchNext独立实现kpm; 不需要可保持默认关闭)'
+        description: '是否开启kpm(使用KpatchNext独立实现kpm，默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       lz4_enable:
-        description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁(RMX5062默认关闭，降低首轮风险)'
+        description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁(默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       lz4kd_enable:
-        description: '是否安装 LZ4KD 补丁(实验/附加项，默认关闭)'
+        description: '是否安装 LZ4KD 补丁(默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       bbr_enable:
         description: '是否启用bbr算法(false关闭,true仅加入算法,default设为默认)'
         required: true
@@ -58,46 +58,46 @@ on:
           - 'true'
           - 'default'
       droidspaces_enable:
-        description: '是否启用Droidspaces容器支持(false关闭,standard开启容器+ntsync支持,extend开启更多测试支持项)'
+        description: '是否启用Droidspaces容器支持(false关闭,standard开启容器+ntsync支持,extend开启更多测试支持项，默认standard)'
         required: true
         type: choice
-        default: 'false'
+        default: 'standard'
         options:
           - 'false'
           - 'standard'
           - 'extend'
       better_net:
-        description: '是否开启网络功能拓展配置(用于 ipset/iptables 等高级网络功能)'
+        description: '是否开启网络功能拓展配置(用于 ipset/iptables 等高级网络功能，默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       ssg_enable:
-        description: '是否启用三星SSG IO调度器支持(RMX5062默认关闭，降低首轮风险)'
+        description: '是否启用三星SSG IO调度器支持(默认开启，按 RMX5062 手动运行配置)'
         required: true
         type: boolean
-        default: false
+        default: true
       rekernel_enable:
-        description: '是否启用Re-Kernel支持'
+        description: '是否启用Re-Kernel支持(默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       baseband_guard:
-        description: '是否开启内核级基带保护(RMX5062默认关闭，先验证基础内核)'
+        description: '是否开启内核级基带保护(默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       ccache_update:
-        description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存)'
+        description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       ccache_debug:
-        description: '是否上传 Ccache调试日志(用于调试)'
+        description: '是否上传 Ccache调试日志(用于调试，默认开启)'
         required: true
         type: boolean
-        default: false
+        default: true
       release_enable:
-        description: '是否创建 GitHub Release(测试期默认关闭，只上传 artifact)'
+        description: '是否创建 GitHub Release(默认关闭，只上传 artifact)'
         required: true
         type: boolean
         default: false
