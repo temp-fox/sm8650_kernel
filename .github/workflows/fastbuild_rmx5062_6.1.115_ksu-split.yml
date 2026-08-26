@@ -28,6 +28,14 @@ on:
           - 'ksunext'
           - 'ksu'
           - 'none'
+      root_manager:
+        description: 'Root管理器集成(default-启用内核Manager识别, none-禁用Manager识别/签名相关逻辑, 后续自行重新root)'
+        required: true
+        type: choice
+        default: 'default'
+        options:
+          - 'default'
+          - 'none'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
         required: true
@@ -461,6 +469,9 @@ jobs:
           cd kernel_workspace
           if [[ "${{ github.event.inputs.ksu_type }}" != "none" ]]; then
             echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+            if [[ "${{ github.event.inputs.root_manager }}" == "none" ]]; then
+              echo "CONFIG_KSU_DISABLE_MANAGER=y" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
           fi
           if [[ "${{ github.event.inputs.susfs_enable }}" == "false" ]]; then
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
@@ -715,6 +726,7 @@ jobs:
           fi
 
           FEATURE_TAGS=""
+          [[ "${{ github.event.inputs.root_manager }}" == "none" ]] && FEATURE_TAGS="${FEATURE_TAGS}_mgrnone"
           [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]] && FEATURE_TAGS="${FEATURE_TAGS}_dss"
           [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]] && FEATURE_TAGS="${FEATURE_TAGS}_kpm"
           [[ "${{ github.event.inputs.lz4_enable }}" == "true" ]] && FEATURE_TAGS="${FEATURE_TAGS}_lz4"
@@ -745,6 +757,7 @@ jobs:
           Kernel Ver: $FULL_VERSION
           KSU Branch: ${KSU_TYPENAME}
           KSU Ver: ${KSUVER}
+          Root Manager: ${{ github.event.inputs.root_manager }}
           susfs: ${{ github.event.inputs.susfs_enable }}
           KPM: ${{ github.event.inputs.kpm_enable }}
           LZ4: ${{ github.event.inputs.lz4_enable }}
@@ -832,6 +845,7 @@ jobs:
           - 源码提交：${{ needs.build.outputs.source_commit }}
           - KSU分支：${{ env.KSU_TYPENAME }}
           - KSU版本：${{ needs.build.outputs.ksuver }}
+          - Root管理器集成：${{ github.event.inputs.root_manager }}
           - susfs支持：${{ github.event.inputs.susfs_enable }}
           - KPM支持：${{ github.event.inputs.kpm_enable }}
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
