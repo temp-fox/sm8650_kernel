@@ -728,7 +728,15 @@ jobs:
           fi
           if [[ "${{ github.event.inputs.susfs_enable }}" == "true" && "${{ github.event.inputs.ksu_type }}" != "none" ]]; then
             grep -E '^(CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' out/.config || true
-            grep -q '^CONFIG_KSU_SUSFS=y' out/.config || { echo "错误：susfs_enable=true 但 CONFIG_KSU_SUSFS 未启用"; exit 1; }
+            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+              if grep -q '^CONFIG_KSU_SUSFS=y' out/.config; then
+                echo "SukiSU SUSFS：CONFIG_KSU_SUSFS 已启用"
+              else
+                echo "SukiSU SUSFS：纯 SukiSU Ultra v4.1.3 未导出 CONFIG_KSU_SUSFS Kconfig 符号，保持原始 RMX5062 SUSFS patch 流程继续构建"
+              fi
+            else
+              grep -q '^CONFIG_KSU_SUSFS=y' out/.config || { echo "错误：susfs_enable=true 但 CONFIG_KSU_SUSFS 未启用"; exit 1; }
+            fi
           fi
           if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
             for cfg in CONFIG_PID_NS CONFIG_IPC_NS CONFIG_SYSVIPC CONFIG_DEVTMPFS CONFIG_NAMESPACES CONFIG_USER_NS CONFIG_POSIX_MQUEUE CONFIG_NTSYNC; do
