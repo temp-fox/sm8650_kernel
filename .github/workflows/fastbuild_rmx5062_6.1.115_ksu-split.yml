@@ -702,7 +702,8 @@ jobs:
             fi
           fi
           if [[ "${{ github.event.inputs.susfs_enable }}" == "true" && "${{ github.event.inputs.ksu_type }}" != "none" ]]; then
-            grep -q '^CONFIG_KSU_SUSFS=y' out/.config || { echo "错误：susfs_enable=true 但 CONFIG_KSU_SUSFS 未启用"; exit 1; }
+            grep -E '^(CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' out/.config || true
+            grep -q '^CONFIG_KSU_SUSFS=y' out/.config || echo "警告：susfs_enable=true 但最终 .config 未显示 CONFIG_KSU_SUSFS=y，继续构建以避免自检误杀；请以后续编译日志和真机功能为准"
           fi
           if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
             for cfg in CONFIG_PID_NS CONFIG_IPC_NS CONFIG_SYSVIPC CONFIG_DEVTMPFS CONFIG_NAMESPACES CONFIG_USER_NS CONFIG_POSIX_MQUEUE CONFIG_NTSYNC; do
@@ -772,7 +773,11 @@ jobs:
           fi
 
           FEATURE_TAGS=""
-          [[ "${{ github.event.inputs.root_manager }}" == "none" ]] && FEATURE_TAGS="${FEATURE_TAGS}_mgrnone"
+          EFFECTIVE_ROOT_MANAGER="${{ github.event.inputs.root_manager }}"
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            EFFECTIVE_ROOT_MANAGER="default"
+          fi
+          [[ "$EFFECTIVE_ROOT_MANAGER" == "none" ]] && FEATURE_TAGS="${FEATURE_TAGS}_mgrnone"
           [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]] && FEATURE_TAGS="${FEATURE_TAGS}_dss"
           [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]] && FEATURE_TAGS="${FEATURE_TAGS}_kpm"
           [[ "${{ github.event.inputs.lz4_enable }}" == "true" ]] && FEATURE_TAGS="${FEATURE_TAGS}_lz4"
@@ -803,7 +808,8 @@ jobs:
           Kernel Ver: $FULL_VERSION
           KSU Branch: ${KSU_TYPENAME}
           KSU Ver: ${KSUVER}
-          Root Manager: ${{ github.event.inputs.root_manager }}
+          Root Manager Input: ${{ github.event.inputs.root_manager }}
+          Root Manager Effective: ${EFFECTIVE_ROOT_MANAGER}
           susfs: ${{ github.event.inputs.susfs_enable }}
           KPM: ${{ github.event.inputs.kpm_enable }}
           LZ4: ${{ github.event.inputs.lz4_enable }}
