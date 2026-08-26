@@ -411,7 +411,8 @@ jobs:
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置。"
           fi
-          if [[ "${{ github.event.inputs.ksu_type }}" == "ksu" ]]; then
+          if [[ "${{ github.event.inputs.ksu_type }}" == "ksu" || "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            echo "正在为 ${{ github.event.inputs.ksu_type }} 启用 KernelSU/SukiSU 侧 SUSFS 支持..."
             cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
             cd ./KernelSU
             patch -p1 < 10_enable_susfs_for_ksu.patch
@@ -703,7 +704,7 @@ jobs:
           fi
           if [[ "${{ github.event.inputs.susfs_enable }}" == "true" && "${{ github.event.inputs.ksu_type }}" != "none" ]]; then
             grep -E '^(CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' out/.config || true
-            grep -q '^CONFIG_KSU_SUSFS=y' out/.config || echo "警告：susfs_enable=true 但最终 .config 未显示 CONFIG_KSU_SUSFS=y，继续构建以避免自检误杀；请以后续编译日志和真机功能为准"
+            grep -q '^CONFIG_KSU_SUSFS=y' out/.config || { echo "错误：susfs_enable=true 但 CONFIG_KSU_SUSFS 未启用"; exit 1; }
           fi
           if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
             for cfg in CONFIG_PID_NS CONFIG_IPC_NS CONFIG_SYSVIPC CONFIG_DEVTMPFS CONFIG_NAMESPACES CONFIG_USER_NS CONFIG_POSIX_MQUEUE CONFIG_NTSYNC; do
