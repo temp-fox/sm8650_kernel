@@ -426,6 +426,71 @@ jobs:
             else
               echo "SukiSU SUSFS Kconfig 符号已存在，跳过插入"
             fi
+            echo "正在为 SukiSU 添加 SUSFS 最小链接兼容层..."
+            sed -i 's/extern struct static_key_true ksu_su_compat_enabled;/extern bool ksu_su_compat_enabled;/' ./common/fs/exec.c
+            sed -i 's/static_branch_likely(&ksu_su_compat_enabled)/ksu_su_compat_enabled/g' ./common/fs/exec.c
+            cat > ./KernelSU/kernel/susfs_compat.c <<'SUKISU_SUSFS_COMPAT'
+          #include <linux/compiler.h>
+          #include <linux/cred.h>
+          #include <linux/fs.h>
+          #include <linux/mm.h>
+          #include <linux/namei.h>
+          #include <linux/printk.h>
+          #include <linux/static_key.h>
+          #include <linux/types.h>
+          #include <linux/uaccess.h>
+          #include <security.h>
+
+          #include "selinux/selinux.h"
+
+          DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);
+          DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);
+
+          u32 susfs_ksu_sid __read_mostly;
+          u32 susfs_priv_app_sid __read_mostly;
+
+          bool ksu_selinux_hide_enabled __read_mostly;
+          bool ksu_selinux_hide_running __read_mostly;
+
+          struct selinux_state fake_state;
+          DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);
+          struct page *fake_status;
+
+          void initialize_fake_status(void)
+          {
+          }
+
+          bool susfs_is_current_ksu_domain(void)
+          {
+              return is_ksu_domain();
+          }
+
+          int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+                                  void *envp, int *flags)
+          {
+              return 0;
+          }
+
+          int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+                                           void *argv, void *envp, int *flags)
+          {
+              return 0;
+          }
+
+          void ksu_handle_sys_read(unsigned int fd)
+          {
+          }
+
+          void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)
+          {
+          }
+
+          int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
+          {
+              return 1;
+          }
+          SUKISU_SUSFS_COMPAT
+            grep -q 'susfs_compat.o' ./KernelSU/kernel/Kbuild || sed -i '/kernelsu-objs := core\/init.o/a kernelsu-objs += susfs_compat.o' ./KernelSU/kernel/Kbuild
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
