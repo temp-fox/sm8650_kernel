@@ -29,7 +29,7 @@ on:
           - 'ksu'
           - 'none'
       root_manager:
-        description: 'Root管理器集成(default-启用内核Manager识别, none-禁用Manager识别/签名相关逻辑, 后续自行重新root)'
+        description: 'Root管理器集成(default-启用Manager识别和App授权; none-禁用Manager识别/签名逻辑，SukiSU授权App root请勿选择)'
         required: true
         type: choice
         default: 'default'
@@ -347,13 +347,13 @@ jobs:
           set -euo pipefail
           cd kernel_workspace
           if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
-            echo "正在配置 SukiSU Ultra..."
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/refs/heads/main/kernel/setup.sh" | bash -s main
+            SUKISU_TAG="v4.1.3"
+            echo "正在配置 SukiSU Ultra ${SUKISU_TAG}..."
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/refs/tags/${SUKISU_TAG}/kernel/setup.sh" | bash -s "${SUKISU_TAG}"
             cd ./KernelSU
-            KSU_VERSION=$(grep -m1 '^KSU_VERSION[[:space:]]*:=' kernel/Kbuild | sed -E 's/.*:= *//; s/[^0-9].*//' || true)
-            if [[ -z "$KSU_VERSION" ]]; then
-              KSU_VERSION=40796
-            fi
+            KSU_VERSION=40796
+            echo "SukiSU Ultra 固定版本：${SUKISU_TAG}"
+            echo "SukiSU Ultra 固定 KSUVER：${KSU_VERSION}"
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event.inputs.ksu_type }}" == "resukisu" ]]; then
@@ -469,7 +469,18 @@ jobs:
           cd kernel_workspace
           if [[ "${{ github.event.inputs.ksu_type }}" != "none" ]]; then
             echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
-            if [[ "${{ github.event.inputs.root_manager }}" == "none" ]]; then
+            echo "# CONFIG_KSU_DISABLE_POLICY is not set" >> ./common/arch/arm64/configs/gki_defconfig
+            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+              echo "# CONFIG_KSU_DISABLE_MANAGER is not set" >> ./common/arch/arm64/configs/gki_defconfig
+              if [[ "${{ github.event.inputs.root_manager }}" == "none" ]]; then
+                echo "警告：sukisu 分支需要 Manager 识别和 App Profile 授权，已忽略 root_manager=none，不写入 CONFIG_KSU_DISABLE_MANAGER=y"
+              fi
+              if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
+                echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
+                echo "CONFIG_KALLSYMS=y" >> ./common/arch/arm64/configs/gki_defconfig
+                echo "CONFIG_KALLSYMS_ALL=y" >> ./common/arch/arm64/configs/gki_defconfig
+              fi
+            elif [[ "${{ github.event.inputs.root_manager }}" == "none" ]]; then
               echo "CONFIG_KSU_DISABLE_MANAGER=y" >> ./common/arch/arm64/configs/gki_defconfig
             fi
           fi
@@ -663,8 +674,43 @@ jobs:
           sudo rm -rf /usr/local/lib/android &
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+
+          KSU_MAKE_ARGS=()
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            KSU_MAKE_ARGS+=(
+              KSU_EXPECTED_SIZE=0x35c
+              KSU_EXPECTED_HASH=947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef
+              KSU_MANAGER_PACKAGE=com.sukisu.ultra
+            )
+            echo "SukiSU 固定版本：v4.1.3"
+            echo "SukiSU Manager 包名：com.sukisu.ultra"
+            echo "SukiSU Manager 签名 size：0x35c"
+            echo "SukiSU Manager 签名 hash：947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef"
+          fi
+
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" gki_defconfig
+
+          echo "====== SukiSU / Manager / Policy / SUSFS / Droidspaces 配置自检 ======"
+          grep -E '^(CONFIG_KSU|CONFIG_KPM|CONFIG_KSU_SUSFS|CONFIG_TMPFS_XATTR|CONFIG_TMPFS_POSIX_ACL|CONFIG_PID_NS|CONFIG_IPC_NS|CONFIG_SYSVIPC|CONFIG_DEVTMPFS|CONFIG_NAMESPACES|CONFIG_USER_NS|CONFIG_POSIX_MQUEUE|CONFIG_NTSYNC)=' out/.config || true
+          grep -E '^# CONFIG_KSU_DISABLE_(MANAGER|POLICY) is not set' out/.config || true
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            grep -q '^CONFIG_KSU=y' out/.config || { echo "错误：CONFIG_KSU 未启用"; exit 1; }
+            ! grep -q '^CONFIG_KSU_DISABLE_MANAGER=y' out/.config || { echo "错误：sukisu 分支不能启用 CONFIG_KSU_DISABLE_MANAGER，否则 Manager 无法识别"; exit 1; }
+            ! grep -q '^CONFIG_KSU_DISABLE_POLICY=y' out/.config || { echo "错误：不能启用 CONFIG_KSU_DISABLE_POLICY，否则 App Profile 授权会被关闭"; exit 1; }
+            if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
+              grep -q '^CONFIG_KPM=y' out/.config || { echo "错误：kpm_enable=true 但 SukiSU CONFIG_KPM 未启用"; exit 1; }
+            fi
+          fi
+          if [[ "${{ github.event.inputs.susfs_enable }}" == "true" && "${{ github.event.inputs.ksu_type }}" != "none" ]]; then
+            grep -q '^CONFIG_KSU_SUSFS=y' out/.config || { echo "错误：susfs_enable=true 但 CONFIG_KSU_SUSFS 未启用"; exit 1; }
+          fi
+          if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
+            for cfg in CONFIG_PID_NS CONFIG_IPC_NS CONFIG_SYSVIPC CONFIG_DEVTMPFS CONFIG_NAMESPACES CONFIG_USER_NS CONFIG_POSIX_MQUEUE CONFIG_NTSYNC; do
+              grep -q "^${cfg}=y" out/.config || { echo "错误：Droidspaces 缺少 ${cfg}=y"; exit 1; }
+            done
+          fi
+
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" Image
           test -f out/arch/arm64/boot/Image
           echo "内核编译完成。"
           ccache -s
@@ -769,6 +815,17 @@ jobs:
           Re-Kernel: ${{ github.event.inputs.rekernel_enable }}
           BBG: ${{ github.event.inputs.baseband_guard }}
           EOF
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            cat >> ./ak3.log <<'EOF'
+          SukiSU Fixed Tag: v4.1.3
+          SukiSU Manager Package: com.sukisu.ultra
+          SukiSU Manager Signature Size: 0x35c
+          SukiSU Manager Signature Hash: 947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef
+          SukiSU Manager Recognition: forced enabled for sukisu
+          SukiSU Policy/App Profile: forced enabled for sukisu
+          SukiSU Notice: use official SukiSU Ultra v4.1.3 Manager for first App root authorization
+          EOF
+          fi
           zip -z ../$AK3_NAME < ./ak3.log
 
       - name: 上传 Ccache 调试日志
@@ -846,6 +903,9 @@ jobs:
           - KSU分支：${{ env.KSU_TYPENAME }}
           - KSU版本：${{ needs.build.outputs.ksuver }}
           - Root管理器集成：${{ github.event.inputs.root_manager }}
+          - SukiSU固定版本：ksu_type=sukisu 时固定 SukiSU Ultra v4.1.3 / KSUVER 40796
+          - SukiSU Manager识别：ksu_type=sukisu 时固定包名 com.sukisu.ultra，签名 0x35c / 947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef
+          - SukiSU授权策略：ksu_type=sukisu 时强制保留 Manager 识别和 App Profile，不启用 CONFIG_KSU_DISABLE_MANAGER / CONFIG_KSU_DISABLE_POLICY
           - susfs支持：${{ github.event.inputs.susfs_enable }}
           - KPM支持：${{ github.event.inputs.kpm_enable }}
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
@@ -862,8 +922,9 @@ jobs:
           2. 刷入前请确认设备为 realme Neo7 Turbo / RMX5062，当前系统为 Android 15 且内核线为 6.1.115 / android14-6.1。
           3. 刷入前务必备份当前槽位 boot，建议同时保留 stock init_boot/vendor_boot/dtbo/vbmeta 等镜像。
           4. 有 root 时可使用 KernelFlasher/HorizonKernelFlasher 刷入 AnyKernel3 包；有第三方 Recovery 时也可在 Recovery 中刷入。
-          5. 若启用 Droidspaces，建议先使用 standard，不建议第一次直接刷 extend。
-          6. 如出现 bootloop，请进 fastboot 刷回备份或线刷包中的 stock boot.img。
+          5. ksu_type=sukisu 时请使用官方 SukiSU Ultra v4.1.3 Manager 首次验证 App root 授权，不要使用 ReSukiSU Manager 或重签 APK 验证 SukiSU 首次授权。
+          6. 若启用 Droidspaces，建议先使用 standard，不建议第一次直接刷 extend。
+          7. 如出现 bootloop，请进 fastboot 刷回备份或线刷包中的 stock boot.img。
 
           #### ※※※刷写内核有风险，确认备份和救砖路径后再操作。※※※
           EOF
