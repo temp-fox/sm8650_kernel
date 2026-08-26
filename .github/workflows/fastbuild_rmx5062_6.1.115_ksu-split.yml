@@ -348,13 +348,32 @@ jobs:
           cd kernel_workspace
           if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             SUKISU_TAG="v4.1.3"
+            KSU_VERSION=20296
             echo "正在配置 SukiSU Ultra ${SUKISU_TAG}..."
             curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/refs/tags/${SUKISU_TAG}/kernel/setup.sh" | bash -s "${SUKISU_TAG}"
             cd ./KernelSU
-            KSU_VERSION=40796
+            git fetch --tags --force
+            git checkout -f "${SUKISU_TAG}"
+            test "$(git describe --tags --exact-match HEAD)" = "${SUKISU_TAG}"
+            SUKISU_COMMIT="$(git rev-parse --short=8 HEAD)"
+            SUKISU_FULL_VERSION="${SUKISU_TAG}-${SUKISU_COMMIT}@${SUKISU_TAG}"
+            sed -i "s|^REPO_BRANCH := .*|REPO_BRANCH := ${SUKISU_TAG}|" kernel/Kbuild
+            sed -i "s|^KSU_GITHUB_VER   := .*|KSU_GITHUB_VER   := ${SUKISU_TAG#v}|" kernel/Kbuild
+            sed -i 's|^GITHUB_COMMITS   := .*|GITHUB_COMMITS   := |' kernel/Kbuild
+            sed -i "s|^KSU_VERSION     := .*|KSU_VERSION     := ${KSU_VERSION}|" kernel/Kbuild
+            sed -i "s|^VERSION_TAG     := .*|VERSION_TAG     := ${SUKISU_TAG#v}|" kernel/Kbuild
+            sed -i "s|^KSU_VERSION_FULL := .*|KSU_VERSION_FULL := ${SUKISU_FULL_VERSION}|" kernel/Kbuild
+            grep -q "^KSU_VERSION     := ${KSU_VERSION}$" kernel/Kbuild
+            grep -q "^VERSION_TAG     := ${SUKISU_TAG#v}$" kernel/Kbuild
+            grep -q "^KSU_VERSION_FULL := ${SUKISU_FULL_VERSION}$" kernel/Kbuild
             echo "SukiSU Ultra 固定版本：${SUKISU_TAG}"
+            echo "SukiSU Ultra 固定提交：${SUKISU_COMMIT}"
+            echo "SukiSU Ultra 固定 Full Version：${SUKISU_FULL_VERSION}"
             echo "SukiSU Ultra 固定 KSUVER：${KSU_VERSION}"
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "SUKISU_TAG=$SUKISU_TAG" >> $GITHUB_ENV
+            echo "SUKISU_KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+            echo "SUKISU_FULL_VERSION=$SUKISU_FULL_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event.inputs.ksu_type }}" == "resukisu" ]]; then
             echo "正在配置 ReSukiSU..."
@@ -415,82 +434,6 @@ jobs:
             cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
             cd ./KernelSU
             patch -p1 < 10_enable_susfs_for_ksu.patch
-          elif [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
-            echo "正在为 SukiSU 添加最小 SUSFS Kconfig 符号，仅确保 CONFIG_KSU_SUSFS 可启用..."
-            if ! grep -q '^config KSU_SUSFS$' ./KernelSU/kernel/Kconfig; then
-              echo "" >> ./KernelSU/kernel/Kconfig
-              echo "config KSU_SUSFS" >> ./KernelSU/kernel/Kconfig
-              echo "    bool \"KernelSU addon - SUSFS\"" >> ./KernelSU/kernel/Kconfig
-              echo "    depends on KSU" >> ./KernelSU/kernel/Kconfig
-              echo "    default y" >> ./KernelSU/kernel/Kconfig
-            else
-              echo "SukiSU SUSFS Kconfig 符号已存在，跳过插入"
-            fi
-            echo "正在为 SukiSU 添加 SUSFS 最小链接兼容层..."
-            sed -i 's/extern struct static_key_true ksu_su_compat_enabled;/extern bool ksu_su_compat_enabled;/' ./common/fs/exec.c
-            sed -i 's/static_branch_likely(&ksu_su_compat_enabled)/ksu_su_compat_enabled/g' ./common/fs/exec.c
-            cat > ./KernelSU/kernel/susfs_compat.c <<'SUKISU_SUSFS_COMPAT'
-          #include <linux/compiler.h>
-          #include <linux/cred.h>
-          #include <linux/fs.h>
-          #include <linux/mm.h>
-          #include <linux/namei.h>
-          #include <linux/printk.h>
-          #include <linux/static_key.h>
-          #include <linux/types.h>
-          #include <linux/uaccess.h>
-          #include <security.h>
-
-          #include "selinux/selinux.h"
-
-          DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);
-          DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);
-
-          u32 susfs_ksu_sid __read_mostly;
-          u32 susfs_priv_app_sid __read_mostly;
-
-          bool ksu_selinux_hide_enabled __read_mostly;
-          bool ksu_selinux_hide_running __read_mostly;
-
-          struct selinux_state fake_state;
-          DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);
-          struct page *fake_status;
-
-          void initialize_fake_status(void)
-          {
-          }
-
-          bool susfs_is_current_ksu_domain(void)
-          {
-              return is_ksu_domain();
-          }
-
-          int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
-                                  void *envp, int *flags)
-          {
-              return 0;
-          }
-
-          int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
-                                           void *argv, void *envp, int *flags)
-          {
-              return 0;
-          }
-
-          void ksu_handle_sys_read(unsigned int fd)
-          {
-          }
-
-          void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)
-          {
-          }
-
-          int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)
-          {
-              return 1;
-          }
-          SUKISU_SUSFS_COMPAT
-            grep -q 'susfs_compat.o' ./KernelSU/kernel/Kbuild || sed -i '/kernelsu-objs := core\/init.o/a kernelsu-objs += susfs_compat.o' ./KernelSU/kernel/Kbuild
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
@@ -547,10 +490,11 @@ jobs:
             echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "# CONFIG_KSU_DISABLE_POLICY is not set" >> ./common/arch/arm64/configs/gki_defconfig
             if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
-              echo "# CONFIG_KSU_DISABLE_MANAGER is not set" >> ./common/arch/arm64/configs/gki_defconfig
               if [[ "${{ github.event.inputs.root_manager }}" == "none" ]]; then
-                echo "警告：sukisu 分支需要 Manager 识别和 App Profile 授权，已忽略 root_manager=none，不写入 CONFIG_KSU_DISABLE_MANAGER=y"
+                echo "错误：ksu_type=sukisu 需要 Manager 识别和 App Profile 授权，root_manager 不能选择 none。请改为 root_manager=default 后重新运行。"
+                exit 1
               fi
+              echo "# CONFIG_KSU_DISABLE_MANAGER is not set" >> ./common/arch/arm64/configs/gki_defconfig
               if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
                 echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
                 echo "CONFIG_KALLSYMS=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -754,11 +698,16 @@ jobs:
           KSU_MAKE_ARGS=()
           if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             KSU_MAKE_ARGS+=(
+              KSU_VERSION="${SUKISU_KSU_VERSION}"
+              KSU_VERSION_FULL="${SUKISU_FULL_VERSION}"
+              VERSION_TAG="${SUKISU_TAG#v}"
               KSU_EXPECTED_SIZE=0x35c
               KSU_EXPECTED_HASH=947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef
               KSU_MANAGER_PACKAGE=com.sukisu.ultra
             )
-            echo "SukiSU 固定版本：v4.1.3"
+            echo "SukiSU 固定版本：${SUKISU_TAG}"
+            echo "SukiSU 固定 KSU_VERSION：${SUKISU_KSU_VERSION}"
+            echo "SukiSU 固定 Full Version：${SUKISU_FULL_VERSION}"
             echo "SukiSU Manager 包名：com.sukisu.ultra"
             echo "SukiSU Manager 签名 size：0x35c"
             echo "SukiSU Manager 签名 hash：947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef"
@@ -849,11 +798,7 @@ jobs:
           fi
 
           FEATURE_TAGS=""
-          EFFECTIVE_ROOT_MANAGER="${{ github.event.inputs.root_manager }}"
-          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
-            EFFECTIVE_ROOT_MANAGER="default"
-          fi
-          [[ "$EFFECTIVE_ROOT_MANAGER" == "none" ]] && FEATURE_TAGS="${FEATURE_TAGS}_mgrnone"
+          [[ "${{ github.event.inputs.root_manager }}" == "none" ]] && FEATURE_TAGS="${FEATURE_TAGS}_mgrnone"
           [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]] && FEATURE_TAGS="${FEATURE_TAGS}_dss"
           [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]] && FEATURE_TAGS="${FEATURE_TAGS}_kpm"
           [[ "${{ github.event.inputs.lz4_enable }}" == "true" ]] && FEATURE_TAGS="${FEATURE_TAGS}_lz4"
@@ -885,7 +830,6 @@ jobs:
           KSU Branch: ${KSU_TYPENAME}
           KSU Ver: ${KSUVER}
           Root Manager Input: ${{ github.event.inputs.root_manager }}
-          Root Manager Effective: ${EFFECTIVE_ROOT_MANAGER}
           susfs: ${{ github.event.inputs.susfs_enable }}
           KPM: ${{ github.event.inputs.kpm_enable }}
           LZ4: ${{ github.event.inputs.lz4_enable }}
@@ -985,7 +929,7 @@ jobs:
           - KSU分支：${{ env.KSU_TYPENAME }}
           - KSU版本：${{ needs.build.outputs.ksuver }}
           - Root管理器集成：${{ github.event.inputs.root_manager }}
-          - SukiSU固定版本：ksu_type=sukisu 时固定 SukiSU Ultra v4.1.3 / KSUVER 40796
+          - SukiSU固定版本：ksu_type=sukisu 时固定 SukiSU Ultra v4.1.3 / KSUVER 20296
           - SukiSU Manager识别：ksu_type=sukisu 时固定包名 com.sukisu.ultra，签名 0x35c / 947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef
           - SukiSU授权策略：ksu_type=sukisu 时强制保留 Manager 识别和 App Profile，不启用 CONFIG_KSU_DISABLE_MANAGER / CONFIG_KSU_DISABLE_POLICY
           - susfs支持：${{ github.event.inputs.susfs_enable }}
