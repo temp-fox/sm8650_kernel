@@ -411,11 +411,109 @@ jobs:
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置。"
           fi
-          if [[ "${{ github.event.inputs.ksu_type }}" == "ksu" || "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
-            echo "正在为 ${{ github.event.inputs.ksu_type }} 启用 KernelSU/SukiSU 侧 SUSFS 支持..."
+          if [[ "${{ github.event.inputs.ksu_type }}" == "ksu" ]]; then
             cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
             cd ./KernelSU
             patch -p1 < 10_enable_susfs_for_ksu.patch
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            echo "正在为 SukiSU 添加最小 SUSFS Kconfig 符号，仅确保 CONFIG_KSU_SUSFS 可启用..."
+            python3 - <<'PY'
+from pathlib import Path
+
+kconfig = Path("./KernelSU/kernel/Kconfig")
+text = kconfig.read_text()
+marker = 'menu "KernelSU - SUSFS"'
+block = r'''
+menu "KernelSU - SUSFS"
+config KSU_SUSFS
+	bool "KernelSU addon - SUSFS"
+	depends on KSU
+	depends on THREAD_INFO_IN_TASK
+	default y
+	help
+	  Patch and Enable SUSFS to kernel with KernelSU.
+
+config KSU_SUSFS_HAS_MAGIC_MOUNT
+	bool "Enable Magic Mount support for SUSFS"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_SUS_PATH
+	bool "Enable to hide suspicious path"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_SUS_MOUNT
+	bool "Enable to hide suspicious mounts"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+	bool "Enable to automatically add KSU default mounts"
+	depends on KSU_SUSFS_SUS_MOUNT
+	default y
+
+config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+	bool "Enable to automatically add bind mounts"
+	depends on KSU_SUSFS_SUS_MOUNT
+	default y
+
+config KSU_SUSFS_SUS_KSTAT
+	bool "Enable to spoof suspicious kstat"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_TRY_UMOUNT
+	bool "Enable to try umount suspicious mounts"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+	bool "Enable to automatically add try_umount for bind mounts"
+	depends on KSU_SUSFS_TRY_UMOUNT
+	default y
+
+config KSU_SUSFS_SPOOF_UNAME
+	bool "Enable to spoof uname"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_ENABLE_LOG
+	bool "Enable logging susfs log to kernel"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+	bool "Enable to automatically hide ksu and susfs symbols"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+	bool "Enable to spoof /proc/bootconfig or /proc/cmdline"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_OPEN_REDIRECT
+	bool "Enable to redirect a path to be opened with another path"
+	depends on KSU_SUSFS
+	default y
+
+config KSU_SUSFS_SUS_MAP
+	bool "Enable to hide some mmapped real file from proc maps"
+	depends on KSU_SUSFS
+	default y
+
+endmenu
+'''
+
+if marker not in text:
+    idx = text.rfind('\nendmenu')
+    if idx == -1:
+        raise SystemExit("KernelSU Kconfig 中没有找到 endmenu，无法插入 SUSFS 配置")
+    kconfig.write_text(text[:idx] + "\n" + block + text[idx:])
+else:
+    print("SukiSU SUSFS Kconfig 符号已存在，跳过插入")
+PY
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
