@@ -430,10 +430,23 @@ jobs:
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置。"
           fi
-          if [[ "${{ github.event.inputs.ksu_type }}" == "ksu" || "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+          if [[ "${{ github.event.inputs.ksu_type }}" == "ksu" ]]; then
             cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
             cd ./KernelSU
             patch -p1 < 10_enable_susfs_for_ksu.patch
+          elif [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            echo "正在按 SukiSU 参考实现应用 SUSFS manual hook 补丁..."
+            git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU_patch.git SukiSU_patch
+            cp ./SukiSU_patch/hooks/syscall_hooks.patch ./common/
+            cd ./common
+            patch -p1 -F 3 < syscall_hooks.patch
+            cd ..
+            if ! grep -q '^config KSU_SUSFS$' ./KernelSU/kernel/Kconfig; then
+              tmp_ksu_kconfig="$(mktemp)"
+              head -n -1 ./KernelSU/kernel/Kconfig > "$tmp_ksu_kconfig"
+              printf '%b' $'\nconfig KSU_MANUAL_HOOK\n\tbool "Use manual hook"\n\tdepends on KSU\n\tdefault n\n\thelp\n\t  Enable manual hook entry points patched into the kernel source.\n\nconfig KSU_SUSFS_SUS_SU\n\tbool "Enable SUSFS su compatibility hook"\n\tdepends on KSU\n\tdefault y\n\thelp\n\t  Enable SUSFS su compatibility hook when not using manual syscall hooks.\n\nmenu "KernelSU - SUSFS"\n\nconfig KSU_SUSFS\n\tbool "KernelSU addon - SUSFS"\n\tdepends on KSU\n\tdepends on THREAD_INFO_IN_TASK\n\tdefault y\n\thelp\n\t  Patch and enable SUSFS for KernelSU/SukiSU.\n\nconfig KSU_SUSFS_HAS_MAGIC_MOUNT\n\tbool "Enable Magic Mount support"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_SUS_PATH\n\tbool "Enable suspicious path hiding"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_SUS_MOUNT\n\tbool "Enable suspicious mount hiding"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT\n\tbool "Auto add KSU default mounts"\n\tdepends on KSU_SUSFS_SUS_MOUNT\n\tdefault y\n\nconfig KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT\n\tbool "Auto add bind mounts"\n\tdepends on KSU_SUSFS_SUS_MOUNT\n\tdefault y\n\nconfig KSU_SUSFS_SUS_KSTAT\n\tbool "Enable suspicious kstat spoofing"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_TRY_UMOUNT\n\tbool "Enable try umount"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n\tbool "Auto add try umount for bind mounts"\n\tdepends on KSU_SUSFS_TRY_UMOUNT\n\tdefault y\n\nconfig KSU_SUSFS_SPOOF_UNAME\n\tbool "Enable uname spoofing"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_ENABLE_LOG\n\tbool "Enable SUSFS kernel log"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS\n\tbool "Hide KSU and SUSFS symbols"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG\n\tbool "Spoof cmdline or bootconfig"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_OPEN_REDIRECT\n\tbool "Enable open redirect"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nconfig KSU_SUSFS_SUS_MAP\n\tbool "Enable suspicious mmap hiding"\n\tdepends on KSU_SUSFS\n\tdefault y\n\nendmenu\n\nendmenu\n' >> "$tmp_ksu_kconfig"
+              mv "$tmp_ksu_kconfig" ./KernelSU/kernel/Kconfig
+            fi
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
@@ -467,6 +480,10 @@ jobs:
         if: inputs.susfs_enable
         run: |
           cd kernel_workspace
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
           echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -474,6 +491,7 @@ jobs:
           echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
