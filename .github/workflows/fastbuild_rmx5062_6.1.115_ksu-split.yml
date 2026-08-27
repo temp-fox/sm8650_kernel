@@ -469,16 +469,8 @@ jobs:
               data = data.replace("static_branch_likely(&ksu_su_compat_enabled)", "ksu_su_compat_enabled")
               p.write_text(data)
 
-          replace(
-              "common/fs/exec.c",
-              "extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,\n\t\t\t\tvoid *envp, int *flags);",
-              "extern int sukisu_handle_execveat_susfs_sucompat(int *fd, struct filename **filename_ptr, void *argv,\n\t\t\t\tvoid *envp, int *flags);",
-          )
-          replace(
-              "common/fs/exec.c",
-              "ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);",
-              "sukisu_handle_execveat_susfs_sucompat(&fd, &filename, &argv, &envp, &flags);",
-          )
+          # common/fs/exec.c 保持 susfs4oki 原始调用名 ksu_handle_execveat_sucompat，
+          # 不再改名接管：su 拦截由 SukiSU 原生 tracepoint hook 独占完成。
           replace(
               "common/kernel/sys.c",
               "extern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);",
@@ -605,77 +597,34 @@ jobs:
               "    ksu_syscall_hook_init();\n\n#ifdef CONFIG_KSU_SUSFS\n    susfs_init();\n#endif\n\n    ksu_feature_init();",
           )
 
-          append_once("KernelSU/kernel/feature/sucompat.c", "sukisu_handle_execveat_susfs_sucompat", r'''
+          append_once("KernelSU/kernel/feature/sucompat.c", "sukisu_susfs_sucompat_stubs", r'''
           #ifdef CONFIG_KSU_SUSFS
-          struct user_arg_ptr;
-          extern void ksu_handle_execveat_ksud(const char *path, struct user_arg_ptr *argv);
-
-          static bool sukisu_susfs_is_su_filename(struct filename *filename)
-          {
-              return filename && !IS_ERR(filename) && filename->name && !memcmp(filename->name, su_path, sizeof(su_path));
-          }
-
-          int sukisu_handle_execveat_susfs_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags)
-          {
-              struct filename *filename;
-              int ret;
-
-              if (!filename_ptr)
-                  return 0;
-
-              filename = *filename_ptr;
-              if (!sukisu_susfs_is_su_filename(filename))
-                  return 0;
-
-              if (!ksu_is_allow_uid_for_current(current_uid().val))
-                  return 0;
-
-              pr_info("sukisu_susfs: execveat su -> ksud\n");
-              memcpy((void *)filename->name, KSUD_PATH, sizeof(KSUD_PATH));
-              ret = escape_with_root_profile();
-              if (ret)
-                  pr_err("sukisu_susfs: escape_with_root_profile failed: %d\n", ret);
-              return 0;
-          }
-
+          /*
+           * sukisu_susfs_sucompat_stubs
+           *
+           * susfs4oki 的 GKI 补丁面向原版 KernelSU，那套实现里这几个 ksu_handle_* 是 su
+           * 拦截的唯一入口。SukiSU v4.1.3 换了架构，已经用 tracepoint syscall hook 原生
+           * 实现了同一套拦截（见 hook/syscall_event_bridge.c 与本文件的 *_sucompat 系列）。
+           *
+           * 因此这里只提供 susfs 补丁链接所需的符号，函数体不得再做一遍 su -> ksud/sh 改写，
+           * 也不得再走一遍 root profile 逃逸。重复执行会破坏 SukiSU 的 Manager 识别与
+           * App Profile 授权链路，表现为「SUSFS 正常但无法给其它应用授权 root」。
+           *
+           * 注意：这不是空实现掩盖问题。SUSFS 自身的功能函数（susfs_init、sus_path、
+           * sus_kstat、uname 伪装、reboot 命令分发等）都是真实实现，不在此列。
+           */
           int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags)
           {
-              struct filename *filename;
-
-              if (!filename_ptr)
-                  return 0;
-
-              filename = *filename_ptr;
-              if (!filename || IS_ERR(filename) || !filename->name)
-                  return 0;
-
-              ksu_handle_execveat_ksud(filename->name, (struct user_arg_ptr *)argv);
-              return sukisu_handle_execveat_susfs_sucompat(fd, filename_ptr, argv, envp, flags);
+              return 0;
           }
 
           int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags)
           {
-              if (!filename || !sukisu_susfs_is_su_filename(*filename))
-                  return 0;
-
-              if (!ksu_is_allow_uid_for_current(current_uid().val))
-                  return 0;
-
-              pr_info("sukisu_susfs: faccessat su -> sh\n");
-              memcpy((void *)(*filename)->name, SH_PATH, sizeof(SH_PATH));
               return 0;
           }
 
           int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)
           {
-              if (!filename || !sukisu_susfs_is_su_filename(*filename))
-                  return 0;
-
-              if (!ksu_is_allow_uid_for_current(current_uid().val))
-                  return 0;
-
-              pr_info("sukisu_susfs: stat su -> sh\n");
-              memcpy((void *)(*filename)->name, SH_PATH, sizeof(SH_PATH));
               return 0;
           }
           #endif
@@ -691,6 +640,8 @@ jobs:
               "static void stop_init_rc_hook();",
               "#ifdef CONFIG_KSU_SUSFS\nDEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);\nDEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);\n#endif\n\nstatic void stop_init_rc_hook();",
           )
+          # SukiSU 原生 ksu_handle_sys_read 是 static 三参数函数，susfs 需要同名单参数函数，
+          # 同一文件内会符号冲突，因此把原生的改名，仅用于保留 SukiSU 自身的 init.rc 注入调用。
           replace(
               "KernelSU/kernel/runtime/ksud_integration.c",
               "static void ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr)",
@@ -711,32 +662,25 @@ jobs:
               "    input_hook_stopped = true;\n    bool ret = schedule_work(&stop_input_hook_work);",
               "    input_hook_stopped = true;\n#ifdef CONFIG_KSU_SUSFS\n    if (static_key_enabled(&ksu_is_input_hook_enabled))\n        static_branch_disable(&ksu_is_input_hook_enabled);\n#endif\n    bool ret = schedule_work(&stop_input_hook_work);",
           )
-          append_once("KernelSU/kernel/runtime/ksud_integration.c", "ksu_handle_vfs_fstat", r'''
+          append_once("KernelSU/kernel/runtime/ksud_integration.c", "sukisu_susfs_init_rc_stubs", r'''
           #ifdef CONFIG_KSU_SUSFS
+          /*
+           * sukisu_susfs_init_rc_stubs
+           *
+           * susfs4oki 的 fs/read_write.c 与 fs/stat.c 会调用这两个符号，用来在原版 KernelSU
+           * 上完成 init.rc 注入并同步 stat 报告的文件长度。SukiSU v4.1.3 自己就 hook 了
+           * __NR_read（见 stop_init_rc_hook 中的 ksu_syscall_table_unhook(__NR_read)），
+           * 已经在做同一份注入。
+           *
+           * 这里只提供符号，不再转发到 SukiSU 的注入逻辑，也不再修改 kstat_size。重复注入会
+           * 让 init.rc 内容与 stat 长度同时出错，直接影响 ksud 启动和 Manager 服务。
+           */
           void ksu_handle_sys_read(unsigned int fd)
           {
-              ksu_handle_sys_read_sukisu(fd, NULL, NULL);
           }
 
           void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)
           {
-              struct file *file;
-              size_t extra;
-
-              if (!kstat_size_ptr)
-                  return;
-
-              file = fget(fd);
-              if (!file)
-                  return;
-
-              if (is_init_rc(file)) {
-                  load_module_rc_once();
-                  extra = ksu_rc_len + module_rc_len;
-                  *kstat_size_ptr += extra;
-              }
-
-              fput(file);
           }
           #endif
           ''')
@@ -754,6 +698,21 @@ jobs:
                   schedule_work(&susfs_extra_works);
           }
 
+          /*
+           * sukisu_handle_setresuid_susfs
+           *
+           * susfs4oki 把这个 hook 插在 __sys_setresuid() 的入口，也就是凭证尚未变更时，
+           * 且无论 setresuid 最终成功还是失败都会调用一次。
+           *
+           * SukiSU v4.1.3 的契约完全不同：ksu_hook_setresuid 会先执行真正的 syscall，
+           * 失败直接返回，成功之后才用 (old_uid, current_uid()) 调用一次 SukiSU 自己的两参数
+           * setresuid 处理函数，在那里完成 Manager fd 安装、seccomp reboot allow、
+           * tracepoint flag 维护和 kernel umount。
+           *
+           * 所以这里绝不能再调用 SukiSU 的两参数 setresuid 处理函数，否则那整套授权状态机
+           * 每次 setresuid 都会跑两遍，其中一遍还在错误的凭证上下文里，会破坏 Manager 识别和
+           * App Profile 授权。这个函数只负责 SUSFS 自己的隐藏标记。
+           */
           int sukisu_handle_setresuid_susfs(uid_t ruid, uid_t euid, uid_t suid)
           {
               uid_t new_uid = (uid_t)-1;
@@ -766,6 +725,10 @@ jobs:
                   new_uid = suid;
 
               if (new_uid == (uid_t)-1)
+                  return 0;
+
+              /* Manager 与已授权 UID 不打任何 SUSFS 标记，避免挡住 su 授权链路。 */
+              if (is_uid_manager(new_uid) || ksu_is_allow_uid_for_current(new_uid))
                   return 0;
 
               if (is_isolated_process(new_uid)) {
@@ -784,11 +747,11 @@ jobs:
                   susfs_set_current_proc_no_su();
                   susfs_set_current_proc_umounted();
                   sukisu_susfs_schedule_extra_work();
-              } else if (!ksu_is_allow_uid_for_current(new_uid) && !is_uid_manager(new_uid)) {
+              } else {
                   susfs_set_current_proc_no_su();
               }
 
-              return ksu_handle_setresuid(current_uid().val, new_uid);
+              return 0;
           }
           #endif
           ''')
@@ -884,6 +847,18 @@ jobs:
           #endif
           ''')
           PY
+            echo "====== SukiSU SUSFS 适配自检：确认未重复执行 SukiSU 原生授权链路 ======"
+            # SukiSU v4.1.3 已用 tracepoint hook 原生实现 su 拦截、init.rc 注入和 setresuid
+            # 授权状态机。susfs 侧只提供符号，不得再做一遍，否则 App Profile 授权会失效。
+            ! grep -qE 'escape_with_root_profile|ksu_handle_execveat_ksud' <(sed -n '/sukisu_susfs_sucompat_stubs/,$p' KernelSU/kernel/feature/sucompat.c) || {
+              echo "错误：sucompat.c 的 susfs 适配块重复执行了 SukiSU 原生 su 拦截逻辑"; exit 1; }
+            ! grep -q 'ksu_handle_setresuid(' <(sed -n '/sukisu_handle_setresuid_susfs/,$p' KernelSU/kernel/hook/setuid_hook.c) || {
+              echo "错误：setuid_hook.c 的 susfs 适配块重复调用了 SukiSU 原生 ksu_handle_setresuid"; exit 1; }
+            ! grep -q 'ksu_handle_sys_read_sukisu' <(sed -n '/sukisu_susfs_init_rc_stubs/,$p' KernelSU/kernel/runtime/ksud_integration.c) || {
+              echo "错误：ksud_integration.c 的 susfs 适配块重复执行了 SukiSU 原生 init.rc 注入"; exit 1; }
+            grep -q 'ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);' common/fs/exec.c || {
+              echo "错误：common/fs/exec.c 的 sucompat 调用名被改写，SukiSU 原生 su 授权入口可能被接管"; exit 1; }
+            echo "自检通过：susfs 适配未重复执行 SukiSU 原生授权链路。"
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
