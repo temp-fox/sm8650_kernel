@@ -348,7 +348,6 @@ jobs:
           cd kernel_workspace
           if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             SUKISU_TAG="v4.1.3"
-            KSU_VERSION=20296
             echo "正在配置 SukiSU Ultra ${SUKISU_TAG}..."
             curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/refs/tags/${SUKISU_TAG}/kernel/setup.sh" | bash -s "${SUKISU_TAG}"
             cd ./KernelSU
@@ -356,6 +355,46 @@ jobs:
             git checkout -f "${SUKISU_TAG}"
             test "$(git describe --tags --exact-match HEAD)" = "${SUKISU_TAG}"
             SUKISU_COMMIT="$(git rev-parse --short=8 HEAD)"
+            # KSU_VERSION 必须与 Manager 的 versionCode 完全一致，否则 Manager 会报
+            # “管理器版本 X 和 kernelsu 驱动版本 Y 不匹配”。
+            #
+            # 两侧用的是同一个公式，这是官方的设计约定：
+            #   内核    kernel/Kbuild:        VERSION_BASE(40000) + commitCount - VERSION_OFFSET(2815)
+            #   Manager manager/build.gradle.kts: major(4) * 10000 + commitCount - end(2815)
+            #
+            # 所以这里不能硬写常数，必须从 tag 所指提交的 commit 数按同一公式推导，
+            # 换 tag 时才会自动跟随。v4.1.3 的 commit 数是 3611，算出 40796，
+            # 与官方 release 资产名 SukiSU_v4.1.3_40796-release.apk 一致。
+            #
+            # 用 rev-list --count HEAD 而不是 --count main：setup.sh 拉下来的仓库不一定
+            # 有本地 main 分支，且我们已 checkout 到 tag，HEAD 就是 tag 所指提交，
+            # 计数结果与官方在 main 上的计数相同（tag 在 main 的历史上）。
+            SUKISU_VERSION_BASE="$(grep -oP '^VERSION_BASE\s*:=\s*\K[0-9]+' kernel/Kbuild)"
+            SUKISU_VERSION_OFFSET="$(grep -oP '^VERSION_OFFSET\s*:=\s*\K[0-9]+' kernel/Kbuild)"
+            # 浅克隆会让 rev-list --count 只数到很小的值，算出来的版本号照样能通过
+            # 后面的 -ge 40000 断言之外的部分，却与 Manager 对不上。这里先补全历史。
+            # setup.sh 当前用的是不带 --depth 的 git clone，正常情况下不会浅克隆，
+            # 但上游改脚本的成本很低，不值得把正确性押在它身上。
+            if [ -f .git/shallow ]; then
+              echo "检测到浅克隆，正在补全完整历史以保证 commit 计数准确..."
+              git fetch --unshallow
+            fi
+            SUKISU_COMMIT_COUNT="$(git rev-list --count HEAD)"
+            KSU_VERSION="$(( SUKISU_VERSION_BASE + SUKISU_COMMIT_COUNT - SUKISU_VERSION_OFFSET ))"
+            echo "SukiSU 版本推导：${SUKISU_VERSION_BASE} + ${SUKISU_COMMIT_COUNT} - ${SUKISU_VERSION_OFFSET} = ${KSU_VERSION}"
+            # 兜底断言：公式取自 Kbuild 本身，取不到值会算出异常数，这里挡住
+            test "${SUKISU_VERSION_BASE}" = "40000" || { echo "错误：VERSION_BASE 解析异常（${SUKISU_VERSION_BASE}）"; exit 1; }
+            test "${SUKISU_VERSION_OFFSET}" = "2815" || { echo "错误：VERSION_OFFSET 解析异常（${SUKISU_VERSION_OFFSET}）"; exit 1; }
+            test "${KSU_VERSION}" -ge 40000 || { echo "错误：推导出的 KSU_VERSION 异常偏小（${KSU_VERSION}），会导致 Manager 报版本不匹配"; exit 1; }
+            # v4.1.3 是写死的 tag，正确答案唯一，直接钉死：
+            # 官方 release 资产名就叫 SukiSU_v4.1.3_40796-release.apk，
+            # Manager 的 versionCode 也是 40796。对不上就是推导链出了问题，
+            # 与其让用户刷完机再看到“版本不匹配”，不如在这里失败。
+            if [ "${SUKISU_TAG}" = "v4.1.3" ] && [ "${KSU_VERSION}" != "40796" ]; then
+              echo "错误：v4.1.3 的 KSU_VERSION 应为 40796（官方 APK: SukiSU_v4.1.3_40796-release.apk），实际推导出 ${KSU_VERSION}"
+              echo "      commit 计数 = ${SUKISU_COMMIT_COUNT}（v4.1.3 应为 3611）"
+              exit 1
+            fi
             SUKISU_FULL_VERSION="${SUKISU_TAG}-${SUKISU_COMMIT}@${SUKISU_TAG}"
             sed -i "s|^REPO_BRANCH := .*|REPO_BRANCH := ${SUKISU_TAG}|" kernel/Kbuild
             sed -i "s|^KSU_GITHUB_VER   := .*|KSU_GITHUB_VER   := ${SUKISU_TAG#v}|" kernel/Kbuild
@@ -1018,7 +1057,7 @@ jobs:
           - KSU分支：${{ env.KSU_TYPENAME }}
           - KSU版本：${{ needs.build.outputs.ksuver }}
           - Root管理器集成：${{ github.event.inputs.root_manager }}
-          - SukiSU固定版本：ksu_type=sukisu 时固定 SukiSU Ultra v4.1.3 / KSUVER 20296
+          - SukiSU固定版本：ksu_type=sukisu 时固定 SukiSU Ultra v4.1.3 / KSUVER 40796（与官方 Manager versionCode 一致）
           - SukiSU Manager识别：ksu_type=sukisu 时固定包名 com.sukisu.ultra，签名 0x35c / 947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef
           - SukiSU授权策略：ksu_type=sukisu 时强制保留 Manager 识别和 App Profile，不启用 CONFIG_KSU_DISABLE_MANAGER / CONFIG_KSU_DISABLE_POLICY
           - susfs支持：${{ github.event.inputs.susfs_enable }}
