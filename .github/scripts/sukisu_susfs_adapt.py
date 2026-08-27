@@ -1,33 +1,39 @@
 from pathlib import Path
 from textwrap import dedent
 
+# 内核源码一律按 UTF-8 读写，并强制 LF 行尾。
+# 不指定 encoding 时 Python 会跟随平台默认（Linux 是 UTF-8，Windows 是 GBK），
+# 本脚本注入的注释含中文，在 Windows 上本地验证会把整个文件重写成 GBK。
+# newline="" 则是防止 write_text 在 Windows 上把 \n 翻成 \r\n 污染内核源码。
+ENC = "utf-8"
+
 def read(path):
-    return Path(path).read_text()
+    return Path(path).read_text(encoding=ENC)
 
 def write(path, data):
-    Path(path).write_text(data)
+    Path(path).write_text(data, encoding=ENC, newline="")
 
 def replace(path, old, new):
     p = Path(path)
-    data = p.read_text()
+    data = p.read_text(encoding=ENC)
     if old not in data:
         raise SystemExit(f"missing expected text in {path}: {old[:120]!r}")
-    p.write_text(data.replace(old, new))
+    p.write_text(data.replace(old, new), encoding=ENC, newline="")
 
 def append_once(path, marker, text):
     p = Path(path)
-    data = p.read_text()
+    data = p.read_text(encoding=ENC)
     if marker not in data:
-        p.write_text(data.rstrip() + "\n\n" + text.strip() + "\n")
+        p.write_text(data.rstrip() + "\n\n" + text.strip() + "\n", encoding=ENC, newline="")
 
 # susfs4oki 的 GKI patch 使用 static_key_true ABI；SukiSU v4.1.3 原生 sucompat 是 bool。
 # 这里只在 common 已打补丁源码中把判断桥接回 SukiSU 原生 bool，避免改动原 SukiSU feature 开关模型。
 for rel in ("common/fs/exec.c", "common/fs/open.c", "common/fs/stat.c"):
     p = Path(rel)
-    data = p.read_text()
+    data = p.read_text(encoding=ENC)
     data = data.replace("extern struct static_key_true ksu_su_compat_enabled;", "extern bool ksu_su_compat_enabled;")
     data = data.replace("static_branch_likely(&ksu_su_compat_enabled)", "ksu_su_compat_enabled")
-    p.write_text(data)
+    p.write_text(data, encoding=ENC, newline="")
 
 # susfs4oki 在 VFS 层调用的 ksu_handle_{execveat,faccessat,stat} 用的是
 # struct filename ** ABI（原版 KernelSU 的形态）。SukiSU v4.1.3 里
@@ -92,8 +98,8 @@ replace(
 )
 
 kconfig = Path("KernelSU/kernel/Kconfig")
-if "config KSU_SUSFS" not in kconfig.read_text():
-    data = kconfig.read_text()
+if "config KSU_SUSFS" not in kconfig.read_text(encoding=ENC):
+    data = kconfig.read_text(encoding=ENC)
     body, tail = data.rsplit("endmenu", 1)
     kconfig.write_text(body + dedent(r'''
 
@@ -193,7 +199,7 @@ if "config KSU_SUSFS" not in kconfig.read_text():
 
     endmenu
 
-    endmenu''') + tail)
+    endmenu''') + tail, encoding=ENC, newline="")
 
 replace(
     "KernelSU/kernel/core/init.c",
@@ -439,6 +445,113 @@ bool susfs_is_current_ksu_domain(void)
 }
 #endif
 ''')
+
+# ---------------------------------------------------------------------------
+# susfs selinux 符号可见性：susfs4oki 是一对配对补丁
+#
+# 50_add_susfs_in_gki-*.patch 打在 common/ 上，会往 security/selinux/avc.c、
+# hooks.c、selinuxfs.c 里插入 extern 声明并直接引用这批符号；
+# 10_enable_susfs_for_ksu.patch 打在 KernelSU/ 上，负责把这批符号从
+# static 改成全局可见，并补上两个 sid 变量。
+#
+# 我们只打了前者（后者是面向原版 KernelSU 的整体改造，硬打会砸掉 SukiSU 的
+# hook 架构），于是链接阶段必然缺符号。上一轮 CI 就在这里失败，报了 8 个
+# undefined symbol：susfs_ksu_sid、susfs_priv_app_sid、ksu_selinux_hide_running、
+# fake_state、ksu_selinux_hide_enabled、fake_status、initialize_fake_status、
+# fake_status_initialize_key。
+#
+# 下面只补这 8 个符号，且严格分成两类处理：
+#   1. selinux_hide.c 里已有真实实现、只是被 static 挡住的 6 个 —— 只去掉
+#      static，一个字节的逻辑都不改；
+#   2. SukiSU 里完全不存在的 2 个 sid —— 按 10_enable_susfs_for_ksu.patch 的
+#      真实实现补齐，不是空 stub。
+#
+# 注意 fake_state 在 v4.1.3 里位于 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+# 的 #else 分支内。本项目内核是 6.1.115，走的正是 #else，所以它确实会被编译
+# 进来；这也是 avc.c/selinuxfs.c 能引用到它的前提。
+# ---------------------------------------------------------------------------
+
+for _old, _new in (
+    ("static bool ksu_selinux_hide_enabled __read_mostly = false;",
+     "bool ksu_selinux_hide_enabled __read_mostly = false;"),
+    ("static bool ksu_selinux_hide_running __read_mostly = false;",
+     "bool ksu_selinux_hide_running __read_mostly = false;"),
+    ("static struct selinux_state fake_state;",
+     "struct selinux_state fake_state;"),
+    ("static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);",
+     "DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);"),
+    ("static struct page *fake_status = NULL;",
+     "struct page *fake_status = NULL;"),
+    ("static void initialize_fake_status()",
+     "void initialize_fake_status()"),
+):
+    replace("KernelSU/kernel/feature/selinux_hide.c", _old, _new)
+
+# susfs 的 avc.c 补丁要拿 ksu 域和 priv_app 域的 sid 做 AVC 日志伪装。
+# 这两个变量 SukiSU 侧没有，按 10_enable_susfs_for_ksu.patch 的原实现补齐，
+# 并在策略加载完成后（apply_kernelsu_rules 末尾）解析一次。
+append_once("KernelSU/kernel/selinux/selinux.c", "susfs_set_batch_sid", r'''
+#ifdef CONFIG_KSU_SUSFS
+/*
+ * susfs 的 security/selinux/avc.c 补丁需要这两个 sid 来伪装 AVC 拒绝日志：
+ * 命中 ksu 域时把 tcontext 报成 priv_app，避免应用侧探测到 ksu 域的存在。
+ *
+ * 与 SukiSU 自己的 cached_su_sid 分开保存：cached_su_sid 服务于 is_ksu_domain()
+ * 的快速判定，走 KERNEL_SU_CONTEXT；这里额外需要 priv_app 域，而且解析时机
+ * 挂在 apply_kernelsu_rules() 之后（策略已换新），两者互不干扰。
+ *
+ * 解析失败保持 0。avc.c 里的比较是 sad->tsid == susfs_ksu_sid，而 tsid 为 0
+ * 不是合法的进程域 sid，所以 0 值只会让伪装静默失效，不会误伤正常日志。
+ */
+#define KERNEL_PRIV_APP_DOMAIN "u:r:priv_app:s0:c512,c768"
+
+u32 susfs_ksu_sid __read_mostly = 0;
+u32 susfs_priv_app_sid __read_mostly = 0;
+
+static void susfs_set_sid(const char *secctx_name, u32 *out_sid)
+{
+    int err;
+
+    err = security_secctx_to_secid(secctx_name, strlen(secctx_name), out_sid);
+    if (err) {
+        pr_err("susfs: failed setting sid for '%s', err: %d\n", secctx_name, err);
+        *out_sid = 0;
+        return;
+    }
+    pr_info("susfs: sid '%u' is set for secctx_name '%s'\n", *out_sid, secctx_name);
+}
+
+void susfs_set_batch_sid(void)
+{
+    susfs_set_sid(KERNEL_SU_CONTEXT, &susfs_ksu_sid);
+    susfs_set_sid(KERNEL_PRIV_APP_DOMAIN, &susfs_priv_app_sid);
+}
+#endif
+''')
+
+replace(
+    "KernelSU/kernel/selinux/selinux.h",
+    "extern u32 ksu_file_sid;\n",
+    "extern u32 ksu_file_sid;\n"
+    "\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "extern u32 susfs_ksu_sid;\n"
+    "extern u32 susfs_priv_app_sid;\n"
+    "void susfs_set_batch_sid(void);\n"
+    "#endif\n",
+)
+
+# 在策略换新、AVC 缓存重置之后解析 sid：此时新策略已生效，
+# security_secctx_to_secid() 才能查到 ksu 域。
+replace(
+    "KernelSU/kernel/selinux/rules.c",
+    "    reset_avc_cache();\nout_unlock:\n    mutex_unlock(&selinux_state.policy_mutex);\n}",
+    "    reset_avc_cache();\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "    susfs_set_batch_sid();\n"
+    "#endif\n"
+    "out_unlock:\n    mutex_unlock(&selinux_state.policy_mutex);\n}",
+)
 
 append_once("KernelSU/kernel/supercall/supercall.c", "ksu_handle_sys_reboot", r'''
 #ifdef CONFIG_KSU_SUSFS

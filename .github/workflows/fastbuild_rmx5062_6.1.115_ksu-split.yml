@@ -481,7 +481,43 @@ jobs:
             ! grep -q 'ksu_handle_sys_read_sukisu' <(sed -n '/sukisu_susfs_init_rc_stubs/,$p' KernelSU/kernel/runtime/ksud_integration.c) || {
               echo "错误：ksud_integration.c 的 susfs 适配块重复执行了 SukiSU 原生 init.rc 注入"; exit 1; }
 
-            echo "自检通过：两套 ABI 各自独立，SukiSU 原生授权入口未被接管。"
+            # 7. susfs 的 security/selinux/{avc,hooks,selinuxfs}.c 补丁会 extern 引用这 8 个符号。
+            #    上一轮 CI 就是在链接阶段缺这 8 个而失败（undefined symbol）。
+            #    selinux_hide.c 里那 6 个必须已去掉 static，且不得残留 static 版本。
+            #    注意这里一律用 grep -F 固定串匹配：正则里的 * 经 YAML + shell 双引号
+            #    两层剥离后会退化成量词，曾经导致断言假失败。
+            grep -qF 'bool ksu_selinux_hide_enabled __read_mostly = false;' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：selinux_hide.c 的 ksu_selinux_hide_enabled 未导出为全局符号，链接会缺符号"; exit 1; }
+            grep -qF 'bool ksu_selinux_hide_running __read_mostly = false;' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：selinux_hide.c 的 ksu_selinux_hide_running 未导出为全局符号，链接会缺符号"; exit 1; }
+            grep -qF 'struct page *fake_status = NULL;' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：selinux_hide.c 的 fake_status 未导出为全局符号"; exit 1; }
+            grep -qF 'struct selinux_state fake_state;' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：selinux_hide.c 的 fake_state 未导出为全局符号"; exit 1; }
+            grep -qF 'DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：selinux_hide.c 的 fake_status_initialize_key 未导出为全局符号"; exit 1; }
+            grep -qF 'void initialize_fake_status()' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：selinux_hide.c 的 initialize_fake_status 未导出为全局函数"; exit 1; }
+            #    反向断言：残留任何一个 static 版本都说明去 static 替换没生效
+            for pat in 'static bool ksu_selinux_hide_enabled' 'static bool ksu_selinux_hide_running' \
+                       'static struct selinux_state fake_state;' 'static struct page *fake_status' \
+                       'static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key)' \
+                       'static void initialize_fake_status()'; do
+              ! grep -qF "$pat" KernelSU/kernel/feature/selinux_hide.c || {
+                echo "错误：selinux_hide.c 仍残留 static 定义（$pat），去 static 替换未生效"; exit 1; }
+            done
+
+            #    另外两个 sid 是 SukiSU 里本来不存在的，必须真实定义并在策略加载后解析。
+            grep -qF 'u32 susfs_ksu_sid __read_mostly = 0;' KernelSU/kernel/selinux/selinux.c || {
+              echo "错误：selinux.c 未定义 susfs_ksu_sid"; exit 1; }
+            grep -qF 'u32 susfs_priv_app_sid __read_mostly = 0;' KernelSU/kernel/selinux/selinux.c || {
+              echo "错误：selinux.c 未定义 susfs_priv_app_sid"; exit 1; }
+            grep -qF 'susfs_set_batch_sid();' KernelSU/kernel/selinux/rules.c || {
+              echo "错误：rules.c 未在策略加载后调用 susfs_set_batch_sid()"; exit 1; }
+            grep -qF 'extern u32 susfs_ksu_sid;' KernelSU/kernel/selinux/selinux.h || {
+              echo "错误：selinux.h 未声明 susfs_ksu_sid"; exit 1; }
+
+            echo "自检通过：两套 ABI 各自独立，SukiSU 原生授权入口未被接管，selinux 符号可见性已补齐。"
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
