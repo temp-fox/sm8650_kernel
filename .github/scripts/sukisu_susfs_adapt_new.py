@@ -385,14 +385,16 @@ static void sukisu_susfs_schedule_extra_work(void)
  * susfs4oki 把这个 hook 插在 __sys_setresuid() 的入口，也就是凭证尚未变更时，
  * 且无论 setresuid 最终成功还是失败都会调用一次。
  *
- * SukiSU v4.1.3 的契约完全不同：ksu_hook_setresuid 会先执行真正的 syscall，
- * 失败直接返回，成功之后才用 (old_uid, current_uid()) 调用一次 SukiSU 自己的两参数
- * setresuid 处理函数，在那里完成 Manager fd 安装、seccomp reboot allow、
- * tracepoint flag 维护和 kernel umount。
+ * 这里不能直接调用 SukiSU v4.1.3 的两参数 setresuid 处理函数：它按“真正
+ * setresuid 已成功执行之后”的状态设计，会再做 kernel umount 等后置逻辑。
+ * 但也不能只做 SUSFS 标记。Manager 进程的 seccomp 过滤器默认不允许 reboot(142)，
+ * 如果这里不提前把 __NR_reboot 加入 SukiSU 的 seccomp allow cache，后续
+ * libksud.so debug su 调用 reboot supercall 时会先被 seccomp 杀掉，根本进不了
+ * kprobe 或 sys_reboot 里的 SUSFS 处理，表现就是 SUSFS 设置页卡死。
  *
- * 所以这里绝不能再调用 SukiSU 的两参数 setresuid 处理函数，否则那整套授权状态机
- * 每次 setresuid 都会跑两遍，其中一遍还在错误的凭证上下文里，会破坏 Manager 识别和
- * App Profile 授权。这个函数只负责 SUSFS 自己的隐藏标记。
+ * 因此本函数只搬运 SukiSU handler 中与“Manager/已授权 app 可正常发起 supercall”
+ * 直接相关的部分：放行 reboot、设置 tracepoint flag、给 Manager 安装 fd。
+ * 普通 app 仍只走 SUSFS 自己的 no_su / umount 标记。
  */
 int sukisu_handle_setresuid_susfs(uid_t ruid, uid_t euid, uid_t suid)
 {
@@ -408,9 +410,26 @@ int sukisu_handle_setresuid_susfs(uid_t ruid, uid_t euid, uid_t suid)
     if (new_uid == (uid_t)-1)
         return 0;
 
-    /* Manager 与已授权 UID 不打任何 SUSFS 标记，避免挡住 su 授权链路。 */
-    if (is_uid_manager(new_uid) || ksu_is_allow_uid_for_current(new_uid))
+    if (unlikely(is_uid_manager(new_uid))) {
+        spin_lock_irq(&current->sighand->siglock);
+        ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
+        ksu_set_task_tracepoint_flag(current);
+        spin_unlock_irq(&current->sighand->siglock);
+
+        pr_info("install fd for manager: %d\n", new_uid);
+        ksu_install_fd();
         return 0;
+    }
+
+    if (ksu_is_allow_uid_for_current(new_uid)) {
+        if (current->seccomp.mode == SECCOMP_MODE_FILTER && current->seccomp.filter) {
+            spin_lock_irq(&current->sighand->siglock);
+            ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
+            spin_unlock_irq(&current->sighand->siglock);
+        }
+        ksu_set_task_tracepoint_flag(current);
+        return 0;
+    }
 
     if (is_isolated_process(new_uid)) {
         susfs_set_current_proc_no_su();

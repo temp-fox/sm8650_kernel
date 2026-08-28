@@ -500,7 +500,11 @@ jobs:
             # 否则 -Wunused-variable 叠加 -Werror 直接编译失败
             grep -qF 'static struct kprobe __maybe_unused reboot_kp' KernelSU/kernel/supercall/supercall.c || {
               echo "错误：reboot_kp 缺 __maybe_unused，开 SUSFS 时会因未使用变量编译失败"; exit 1; }
-            echo "自检通过：reboot 通道单一路径，管理器 fd 安装分支已就位。"
+            grep -qF 'ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);' <(sed -n '/sukisu_handle_setresuid_susfs/,$p' KernelSU/kernel/hook/setuid_hook.c) || {
+              echo "错误：setuid_hook.c 的 SUSFS 适配块未给 Manager/授权 app 放行 reboot(142)，libksud 会被 seccomp SIGSYS 杀掉"; exit 1; }
+            grep -qF 'ksu_set_task_tracepoint_flag(current);' <(sed -n '/sukisu_handle_setresuid_susfs/,$p' KernelSU/kernel/hook/setuid_hook.c) || {
+              echo "错误：setuid_hook.c 的 SUSFS 适配块未恢复 SukiSU tracepoint flag，授权 app 的 supercall 通道不完整"; exit 1; }
+            echo "自检通过：reboot 通道单一路径，Manager/授权 app 的 seccomp 放行已就位。"
             echo "====== SukiSU SUSFS 适配自检：确认两套 ABI 未互相接管 ======"
             # v4.1.3 的 ksu_handle_faccessat / ksu_handle_stat 是 const char __user ** ABI，
             # 由 tracepoint 在 syscall 层调用，是 SukiSU 原生 su 授权入口；susfs 在 VFS 层用的是
