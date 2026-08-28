@@ -1,4 +1,4 @@
-name: realme Neo7 Turbo 6.1.115版本
+name: newrealme Neo7 Turbo 6.1.115
 
 env:
   TZ: Asia/Shanghai
@@ -478,7 +478,29 @@ jobs:
             echo "保留 susfs4oki 的 OKI GKI 补丁；不再叠加 syscall_hooks.patch，避免 fs/open.c 等双重 hook 类型冲突。"
             # 适配脚本放在独立文件里，不内嵌 heredoc：GitHub 会把整个 run 块当一个表达式
             # 计算，上限 21000 字符，内嵌 500 多行 Python 会直接超限导致 workflow 无法解析。
-            python3 "${{ github.workspace }}/.github/scripts/sukisu_susfs_adapt.py"
+            python3 "${{ github.workspace }}/.github/scripts/sukisu_susfs_adapt_new.py"
+            echo "====== SUSFS 设置页卡死修复自检 ======"
+            # 开启 SUSFS 后，同一次 syscall(SYS_reboot) 上原本有两条路径并存：
+            # v4.1.3 自带的 kprobe（认 KSU_INSTALL_MAGIC2），以及 susfs 补丁插在
+            # SYSCALL_DEFINE4(reboot) 函数体里的 ksu_handle_sys_reboot() 调用。
+            # 后者原先只认 SUSFS_MAGIC，管理器请求装 fd 时会落到 return 1 →
+            # goto orig_flow → 掉进真正的 sys_reboot → 被 CAP_SYS_BOOT 拒掉返回
+            # -EPERM。fd 其实已由 kprobe 装好，但返回值是失败，管理器判定授权失败。
+            # 管理器 SUSFS 页面会对每个已安装 app 并发起 root shell，全部命中这条
+            # 失败路径，页面就卡死了。修法对齐 builtin 分支：开 SUSFS 时停用 kprobe，
+            # 由 ksu_handle_sys_reboot 独占，并补上 KSU_INSTALL_MAGIC2 分支。
+            grep -qF 'if (magic2 == KSU_INSTALL_MAGIC2)' KernelSU/kernel/supercall/supercall.c || {
+              echo "错误：supercall.c 缺少 KSU_INSTALL_MAGIC2 分支，管理器装 fd 会失败，SUSFS 页面必然卡死"; exit 1; }
+            grep -qF 'ksu_supercall_reboot_handler_susfs' KernelSU/kernel/supercall/supercall.c || {
+              echo "错误：supercall.c 未注入 fd 安装处理函数"; exit 1; }
+            # kprobe 必须落在 #else 分支里，即开 SUSFS 时不注册，否则两条路径并存
+            grep -qF '#ifdef CONFIG_KSU_SUSFS' KernelSU/kernel/supercall/supercall.c || {
+              echo "错误：supercall.c 的 kprobe 注册未做 SUSFS 条件编译"; exit 1; }
+            # reboot_kp 在开 SUSFS 时两处引用都被编译掉，必须有 __maybe_unused，
+            # 否则 -Wunused-variable 叠加 -Werror 直接编译失败
+            grep -qF 'static struct kprobe __maybe_unused reboot_kp' KernelSU/kernel/supercall/supercall.c || {
+              echo "错误：reboot_kp 缺 __maybe_unused，开 SUSFS 时会因未使用变量编译失败"; exit 1; }
+            echo "自检通过：reboot 通道单一路径，管理器 fd 安装分支已就位。"
             echo "====== SukiSU SUSFS 适配自检：确认两套 ABI 未互相接管 ======"
             # v4.1.3 的 ksu_handle_faccessat / ksu_handle_stat 是 const char __user ** ABI，
             # 由 tracepoint 在 syscall 层调用，是 SukiSU 原生 su 授权入口；susfs 在 VFS 层用的是
