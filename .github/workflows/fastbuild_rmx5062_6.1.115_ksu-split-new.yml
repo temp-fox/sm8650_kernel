@@ -970,8 +970,8 @@ jobs:
               echo "提示：$meta 不存在，跳过。"
             fi
           done
-          grep -qF 'LINUX_COMPILE_BY "${{ env.RMX5062_KBUILD_BUILD_USER }}"' out/include/generated/compile.h || { echo "错误：compile.h 的构建用户不符合预期"; exit 1; }
-          grep -qF 'LINUX_COMPILE_HOST "${{ env.RMX5062_KBUILD_BUILD_HOST }}"' out/include/generated/compile.h || { echo "错误：compile.h 的构建主机不符合预期"; exit 1; }
+          grep -Eq 'LINUX_COMPILE_BY[[:space:]]+"${{ env.RMX5062_KBUILD_BUILD_USER }}"' out/include/generated/compile.h || { echo "错误：compile.h 的构建用户不符合预期"; exit 1; }
+          grep -Eq 'LINUX_COMPILE_HOST[[:space:]]+"${{ env.RMX5062_KBUILD_BUILD_HOST }}"' out/include/generated/compile.h || { echo "错误：compile.h 的构建主机不符合预期"; exit 1; }
           grep -qF "UTS_RELEASE \"${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${FINAL_SUFFIX}\"" out/include/generated/utsrelease.h || { echo "错误：utsrelease.h 与目标内核版本后缀不一致"; exit 1; }
           EXPECTED_UTS_TIME="$(TZ='${{ env.TZ }}' date -d '${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }}' '+%H:%M:%S')"
           EXPECTED_UTS_YEAR="$(TZ='${{ env.TZ }}' date -d '${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }}' '+%Y')"
