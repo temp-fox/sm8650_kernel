@@ -572,6 +572,102 @@ replace(
     "out_unlock:\n    mutex_unlock(&selinux_state.policy_mutex);\n}",
 )
 
+# ---------------------------------------------------------------------------
+# SELinux policy 直读隐藏
+#
+# SukiSU v4.1.3 自带的 selinux_hide 只覆盖 /sys/fs/selinux/context、access
+# 和 status。检测器直接读取 /sys/fs/selinux/policy 时，sel_open_policy()
+# 仍会从当前 live policy 导出一份快照，于是能扫到 apply_kernelsu_rules()
+# 追加进去的 ksu/ksu_file 以及模块追加的 magisk/droidspacesd 规则。
+#
+# backup_sepolicy 是 apply_kernelsu_rules() 修改 live policy 前复制出来的原始策略，
+# 也是 selinux_hide 给普通 App 做 context/access 计算时使用的那份策略。这里只在
+# ksu_selinux_hide_running 且调用者是普通 App UID 时，把 policy 快照来源切到
+# fake_state/backup_sepolicy；root、system、shell 以及未开启 selinux_hide 时仍走原始
+# live policy，避免影响系统服务、管理器和调试。
+# ---------------------------------------------------------------------------
+
+replace(
+    "common/security/selinux/selinuxfs.c",
+    "#include <linux/slab.h>",
+    "#include <linux/slab.h>\n#include <linux/vmalloc.h>",
+)
+
+replace(
+    "common/security/selinux/selinuxfs.c",
+    "#include \"ima.h\"",
+    "#include \"ima.h\"\n#ifdef CONFIG_KSU_SUSFS\n#include \"ss/services.h\"\n#endif",
+)
+
+replace(
+    "common/security/selinux/selinuxfs.c",
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "extern struct selinux_state fake_state;\n"
+    "extern struct page *fake_status;\n"
+    "extern struct static_key_false fake_status_initialize_key;\n"
+    "extern bool ksu_selinux_hide_running __read_mostly;\n"
+    "extern bool ksu_selinux_hide_enabled __read_mostly;\n"
+    "extern void initialize_fake_status(void);\n"
+    "#endif // #ifdef CONFIG_KSU_SUSFS",
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "extern struct selinux_state fake_state;\n"
+    "extern struct selinux_policy *backup_sepolicy;\n"
+    "extern struct page *fake_status;\n"
+    "extern struct static_key_false fake_status_initialize_key;\n"
+    "extern bool ksu_selinux_hide_running __read_mostly;\n"
+    "extern bool ksu_selinux_hide_enabled __read_mostly;\n"
+    "extern void initialize_fake_status(void);\n"
+    "static int susfs_read_backup_policy(void **data, size_t *len);\n"
+    "#endif // #ifdef CONFIG_KSU_SUSFS",
+)
+
+append_once("common/security/selinux/selinuxfs.c", "susfs_read_backup_policy", r'''
+#ifdef CONFIG_KSU_SUSFS
+static int susfs_read_backup_policy(void **data, size_t *len)
+{
+    struct policy_file fp;
+    int rc;
+
+    if (!backup_sepolicy)
+        return -EINVAL;
+
+    *len = backup_sepolicy->policydb.len;
+    *data = vmalloc_user(*len);
+    if (!*data)
+        return -ENOMEM;
+
+    fp.data = *data;
+    fp.len = *len;
+
+    rc = policydb_write(&backup_sepolicy->policydb, &fp);
+    if (rc) {
+        vfree(*data);
+        *data = NULL;
+        *len = 0;
+        return rc;
+    }
+
+    *len = (unsigned long)fp.data - (unsigned long)*data;
+    return 0;
+}
+#endif
+''')
+
+replace(
+    "common/security/selinux/selinuxfs.c",
+    "\trc = security_read_policy(state, &plm->data, &plm->len);\n"
+    "\tif (rc)\n"
+    "\t\tgoto err;",
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "\tif (likely(current_uid().val >= 10000 && ksu_selinux_hide_running && backup_sepolicy))\n"
+    "\t\trc = susfs_read_backup_policy(&plm->data, &plm->len);\n"
+    "\telse\n"
+    "#endif\n"
+    "\t\trc = security_read_policy(state, &plm->data, &plm->len);\n"
+    "\tif (rc)\n"
+    "\t\tgoto err;",
+)
+
 # =============================================================================
 # SUSFS 设置页卡死的修复
 #

@@ -582,7 +582,19 @@ jobs:
             grep -qF 'extern u32 susfs_ksu_sid;' KernelSU/kernel/selinux/selinux.h || {
               echo "错误：selinux.h 未声明 susfs_ksu_sid"; exit 1; }
 
-            echo "自检通过：两套 ABI 各自独立，SukiSU 原生授权入口未被接管，selinux 符号可见性已补齐。"
+            # 8. SukiSU 原生 selinux_hide 只处理 context/access/status；检测器直接读
+            #    /sys/fs/selinux/policy 仍会看到 live policy 里的 ksu/ksu_file 规则。
+            #    新 flow 必须让普通 App 在 selinux_hide 已运行时读取 backup_sepolicy。
+            grep -qF 'extern struct selinux_policy *backup_sepolicy;' common/security/selinux/selinuxfs.c || {
+              echo "错误：selinuxfs.c 未声明 backup_sepolicy，无法向普通 App 返回原始 SELinux policy"; exit 1; }
+            grep -qF 'static int susfs_read_backup_policy(void **data, size_t *len)' common/security/selinux/selinuxfs.c || {
+              echo "错误：selinuxfs.c 未注入 backup_sepolicy 导出函数"; exit 1; }
+            grep -qF 'current_uid().val >= 10000 && ksu_selinux_hide_running && backup_sepolicy' common/security/selinux/selinuxfs.c || {
+              echo "错误：/sys/fs/selinux/policy 未按普通 App UID 和 selinux_hide 运行状态做隐藏门控"; exit 1; }
+            grep -qF 'rc = susfs_read_backup_policy(&plm->data, &plm->len);' common/security/selinux/selinuxfs.c || {
+              echo "错误：/sys/fs/selinux/policy 未切换到 backup_sepolicy 快照"; exit 1; }
+
+            echo "自检通过：两套 ABI 各自独立，SukiSU 原生授权入口未被接管，selinux 符号可见性与 policy 直读隐藏已补齐。"
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
