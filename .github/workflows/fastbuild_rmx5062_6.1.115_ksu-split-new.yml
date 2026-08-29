@@ -13,6 +13,10 @@ env:
   SOURCE_REF: 'master'
   SOURCE_DIR: 'realme_neo7_turbo-AndroidV-kernel-source-master'
   CCACHE_KEY: ccache-rmx5062-android14-6.1.115
+  RMX5062_KBUILD_BUILD_USER: 'builder'
+  RMX5062_KBUILD_BUILD_HOST: 'localhost'
+  RMX5062_KBUILD_BUILD_TIMESTAMP: '2025-09-10 13:11:53'
+  RMX5062_KBUILD_BUILD_VERSION: '1'
 
 on:
   workflow_dispatch:
@@ -822,11 +826,23 @@ jobs:
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
 
       - name: 添加制作名称
+        env:
+          KERNEL_SUFFIX_INPUT: ${{ github.event.inputs.kernel_suffix }}
         run: |
+          set -euo pipefail
           cd kernel_workspace
           echo "替换内核版本后缀..."
-          if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
-            FINAL_SUFFIX="${{ github.event.inputs.kernel_suffix }}"
+          RAW_SUFFIX="${KERNEL_SUFFIX_INPUT:-}"
+          if [[ -n "$RAW_SUFFIX" ]]; then
+            if [[ "$RAW_SUFFIX" == -* ]]; then
+              echo "错误：kernel_suffix 开头不要带连字符，workflow 会自动添加 '-'。"
+              exit 1
+            fi
+            if [[ ! "$RAW_SUFFIX" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "错误：kernel_suffix 只能包含字母、数字、点、下划线和短横线，不能包含空格或 shell 保留字符。"
+              exit 1
+            fi
+            FINAL_SUFFIX="$RAW_SUFFIX"
           else
             FINAL_SUFFIX="${{ env.KERNEL_NAME }}"
           fi
@@ -863,8 +879,8 @@ jobs:
           cp "${{ github.workspace }}/lib/libfakestat.so" ./libfakestat.so
           cp "${{ github.workspace }}/lib/libfaketimeMT.so" ./libfaketimeMT.so
           chmod 777 ./*.so
-          export FAKESTAT="2025-09-10 13:11:53"
-          export FAKETIME="@2025-09-10 13:11:53"
+          export FAKESTAT="${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }}"
+          export FAKETIME="@${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }}"
           SO_DIR=$(pwd)
           export PRELOAD_LIBS="$SO_DIR/libfakestat.so $SO_DIR/libfaketimeMT.so"
           echo '#!/bin/bash' > cc-wrapper
@@ -902,7 +918,15 @@ jobs:
             echo "SukiSU Manager 签名 hash：947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef"
           fi
 
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" gki_defconfig
+          KBUILD_MAKE_ARGS=(
+            KBUILD_BUILD_USER="${{ env.RMX5062_KBUILD_BUILD_USER }}"
+            KBUILD_BUILD_HOST="${{ env.RMX5062_KBUILD_BUILD_HOST }}"
+            KBUILD_BUILD_TIMESTAMP="${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }}"
+            KBUILD_BUILD_VERSION="${{ env.RMX5062_KBUILD_BUILD_VERSION }}"
+          )
+          echo "KBUILD 构建标识：${{ env.RMX5062_KBUILD_BUILD_USER }}@${{ env.RMX5062_KBUILD_BUILD_HOST }} / ${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }} / #${{ env.RMX5062_KBUILD_BUILD_VERSION }}"
+
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" "${KBUILD_MAKE_ARGS[@]}" gki_defconfig
 
           echo "====== SukiSU / Manager / Policy / SUSFS / Droidspaces 配置自检 ======"
           grep -E '^(CONFIG_KSU|CONFIG_KPM|CONFIG_KSU_SUSFS|CONFIG_TMPFS_XATTR|CONFIG_TMPFS_POSIX_ACL|CONFIG_PID_NS|CONFIG_IPC_NS|CONFIG_SYSVIPC|CONFIG_DEVTMPFS|CONFIG_NAMESPACES|CONFIG_USER_NS|CONFIG_POSIX_MQUEUE|CONFIG_NTSYNC)=' out/.config || true
@@ -933,17 +957,49 @@ jobs:
             printf '%s\n' "$KERNEL_CONFIG_SPOOF_VALUE" | tr ' ' '\n'
           fi
 
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" "${KERNEL_CONFIG_SPOOF_ARGS[@]}" Image
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" "${KBUILD_MAKE_ARGS[@]}" "${KERNEL_CONFIG_SPOOF_ARGS[@]}" Image
           test -f out/arch/arm64/boot/Image
+
+          echo "====== KBUILD / UTS 构建元数据自检 ======"
+          for meta in out/include/generated/compile.h out/include/generated/utsrelease.h out/include/generated/utsversion.h; do
+            if [[ -f "$meta" ]]; then
+              echo "--- $meta ---"
+              cat "$meta"
+              ! grep -Eiq 'runner@|/home/runner|github-actions|actions/runner|fv-az|-dirty' "$meta" || { echo "错误：$meta 暴露 CI/dirty 构建指纹"; exit 1; }
+            else
+              echo "提示：$meta 不存在，跳过。"
+            fi
+          done
+          grep -qF 'LINUX_COMPILE_BY "${{ env.RMX5062_KBUILD_BUILD_USER }}"' out/include/generated/compile.h || { echo "错误：compile.h 的构建用户不符合预期"; exit 1; }
+          grep -qF 'LINUX_COMPILE_HOST "${{ env.RMX5062_KBUILD_BUILD_HOST }}"' out/include/generated/compile.h || { echo "错误：compile.h 的构建主机不符合预期"; exit 1; }
+          grep -qF "UTS_RELEASE \"${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${FINAL_SUFFIX}\"" out/include/generated/utsrelease.h || { echo "错误：utsrelease.h 与目标内核版本后缀不一致"; exit 1; }
+          EXPECTED_UTS_TIME="$(TZ='${{ env.TZ }}' date -d '${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }}' '+%H:%M:%S')"
+          EXPECTED_UTS_YEAR="$(TZ='${{ env.TZ }}' date -d '${{ env.RMX5062_KBUILD_BUILD_TIMESTAMP }}' '+%Y')"
+          META_TIME_FILES=(out/include/generated/compile.h)
+          [[ -f out/include/generated/utsversion.h ]] && META_TIME_FILES+=(out/include/generated/utsversion.h)
+          if ! grep -qs "$EXPECTED_UTS_TIME" "${META_TIME_FILES[@]}" || ! grep -qs "$EXPECTED_UTS_YEAR" "${META_TIME_FILES[@]}"; then
+            echo "错误：generated header 未使用预期 KBUILD 构建时间"
+            exit 1
+          fi
 
           if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             echo "====== Image 内嵌 config 展示面自检 ======"
             bash scripts/extract-ikconfig out/arch/arm64/boot/Image > out/image.config
-            for cfg in CONFIG_KSU CONFIG_KPM CONFIG_KSU_MANUAL_HOOK CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG; do
-              ! grep -q "^${cfg}=y" out/image.config || { echo "错误：Image 内嵌 config 仍暴露 ${cfg}=y"; exit 1; }
-              grep -q "^# ${cfg} is not set" out/image.config || { echo "错误：Image 内嵌 config 未把 ${cfg} 伪装成未启用"; exit 1; }
+            for rule in $KERNEL_CONFIG_SPOOF_VALUE; do
+              cfg="${rule%%=*}"
+              val="${rule#*=}"
+              if [[ "$val" == "unset" || "$val" == "n" ]]; then
+                ! grep -q "^${cfg}=" out/image.config || { echo "错误：Image 内嵌 config 仍暴露 ${cfg} 的启用值：$(grep -m1 "^${cfg}=" out/image.config)"; exit 1; }
+                if grep -q "^# ${cfg} is not set" out/image.config; then
+                  echo "确认：${cfg} 已展示为未启用。"
+                else
+                  echo "提示：${cfg} 不在 Image 内嵌 config 中，按 config_spoof 规则视为无暴露。"
+                fi
+              else
+                grep -q "^${cfg}=${val}$" out/image.config || { echo "错误：Image 内嵌 config 未把 ${cfg} 伪装成 ${val}"; exit 1; }
+              fi
             done
-            echo "Image 内嵌 config 自检通过：root/SUSFS/KPM 关键配置不再以 =y 暴露。"
+            echo "Image 内嵌 config 自检通过：KERNEL_CONFIG_SPOOF 列表均已按预期展示。"
           fi
 
           echo "内核编译完成。"
@@ -963,12 +1019,29 @@ jobs:
           set -euo pipefail
           echo "正在应用KP-N并修补内核..."
           cd kernel_workspace/common/out/arch/arm64/boot
+          test -s Image || { echo "错误：KPM 修补前 Image 不存在或为空"; exit 1; }
+          IMAGE_BEFORE_SIZE=$(stat -c '%s' Image)
+          echo "KPM 修补前 Image 大小：${IMAGE_BEFORE_SIZE}"
+          echo "KPM_IMAGE_BEFORE_SIZE=${IMAGE_BEFORE_SIZE}" >> $GITHUB_ENV
           wget https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download/kptools-linux
           wget https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download/kpimg-linux
           chmod +x ./kptools-linux
           ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage
+          test -s oImage || { echo "错误：KPM 修补后的 oImage 不存在或为空"; exit 1; }
           rm -f Image
           mv oImage Image
+          test -s Image || { echo "错误：KPM 修补后的最终 Image 不存在或为空"; exit 1; }
+          IMAGE_AFTER_SIZE=$(stat -c '%s' Image)
+          echo "KPM 修补后 Image 大小：${IMAGE_AFTER_SIZE}"
+          echo "KPM_IMAGE_AFTER_SIZE=${IMAGE_AFTER_SIZE}" >> $GITHUB_ENV
+          if [[ "$IMAGE_AFTER_SIZE" -le 10485760 ]]; then
+            echo "错误：KPM 修补后的 Image 异常过小"
+            exit 1
+          fi
+          if strings Image | grep -Eiq 'runner@|/home/runner|github-actions|actions/runner|fv-az|-dirty'; then
+            echo "错误：KPM 后最终 Image 暴露 CI/dirty 构建指纹"
+            exit 1
+          fi
 
       - name: 克隆 AnyKernel3 并打包
         id: create_zip
@@ -978,8 +1051,20 @@ jobs:
           git clone https://github.com/cctv18/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           cd AnyKernel3
+          test -s ../common/out/arch/arm64/boot/Image || { echo "错误：打包前最终 Image 不存在或为空"; exit 1; }
+          FINAL_IMAGE_SIZE=$(stat -c '%s' ../common/out/arch/arm64/boot/Image)
           cp ../common/out/arch/arm64/boot/Image ./Image
-          test -f ./Image
+          test -s ./Image || { echo "错误：AnyKernel3/Image 不存在或为空"; exit 1; }
+          AK3_IMAGE_SIZE=$(stat -c '%s' ./Image)
+          echo "打包 Image 大小：${AK3_IMAGE_SIZE}"
+          if [[ "$FINAL_IMAGE_SIZE" != "$AK3_IMAGE_SIZE" ]]; then
+            echo "错误：AnyKernel3/Image 大小与最终 Image 不一致"
+            exit 1
+          fi
+          if [[ "${{ github.event.inputs.kpm_enable }}" == 'true' && -n "${KPM_IMAGE_AFTER_SIZE:-}" && "$AK3_IMAGE_SIZE" != "$KPM_IMAGE_AFTER_SIZE" ]]; then
+            echo "错误：AnyKernel3/Image 不是 KPM 修补后的最终 Image"
+            exit 1
+          fi
 
           if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             KSU_TYPENAME="SukiSU"
@@ -1005,6 +1090,11 @@ jobs:
             FINAL_SUFFIX="${{ env.KERNEL_NAME }}"
           fi
 
+          FINAL_SUFFIX="${FINAL_SUFFIX:-${{ env.KERNEL_NAME }}}"
+          if [[ "$FINAL_SUFFIX" == -* || ! "$FINAL_SUFFIX" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "错误：最终 kernel_suffix 不合法，停止打包。"
+            exit 1
+          fi
           FEATURE_TAGS=""
           [[ "${{ github.event.inputs.root_manager }}" == "none" ]] && FEATURE_TAGS="${FEATURE_TAGS}_mgrnone"
           [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]] && FEATURE_TAGS="${FEATURE_TAGS}_dss"
