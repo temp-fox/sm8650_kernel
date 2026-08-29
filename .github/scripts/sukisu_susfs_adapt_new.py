@@ -621,8 +621,9 @@ replace(
     "#endif // #ifdef CONFIG_KSU_SUSFS",
 )
 
-append_once("common/security/selinux/selinuxfs.c", "susfs_read_backup_policy", r'''
+append_once("common/security/selinux/selinuxfs.c", "susfs_read_backup_policy_def", r'''
 #ifdef CONFIG_KSU_SUSFS
+/* susfs_read_backup_policy_def */
 static int susfs_read_backup_policy(void **data, size_t *len)
 {
     struct policy_file fp;
