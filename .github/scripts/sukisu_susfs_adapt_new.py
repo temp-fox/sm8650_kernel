@@ -506,6 +506,48 @@ for _old, _new in (
 ):
     replace("KernelSU/kernel/feature/selinux_hide.c", _old, _new)
 
+# SukiSU 原生逻辑先写 enabled，再尝试启用 hook。若 hook 失败，会留下
+# enabled=true/running=false 的半开启状态：/status 可能已被 fake，/policy 却仍走
+# live policy。这里让失败路径回滚 enabled，避免检测器看到互相矛盾的 SELinux 视图。
+replace(
+    "KernelSU/kernel/feature/selinux_hide.c",
+    "            ret = ksu_selinux_hide_enable();\n"
+    "            if (!ret) {\n"
+    "                ksu_selinux_hide_running = true;\n"
+    "            }",
+    "            ret = ksu_selinux_hide_enable();\n"
+    "            if (!ret) {\n"
+    "                ksu_selinux_hide_running = true;\n"
+    "            } else {\n"
+    "                ksu_selinux_hide_enabled = false;\n"
+    "            }",
+)
+
+# fake status 不能继续暴露 sequence=0/policyload=0。春秋检测已经把这组值作为
+# SELinux 状态异常提示。这里只改 fake page：复制 live status 后做最小非零修正，
+# 不影响 root/system/shell 看到的真实 SELinux 状态。
+replace(
+    "KernelSU/kernel/feature/selinux_hide.c",
+    "    if (ksu_late_loaded && !new_status->enforcing) {\n"
+    "        // In late_load mode, we may be loaded when selinux was set to permissive\n"
+    "        // So we need to modify the sequence value\n"
+    "        // We assume that setenforce 0 is just called once\n"
+    "        new_status->enforcing = 1;\n"
+    "        new_status->sequence = new_status->policyload ? 4 : 0;\n"
+    "    }",
+    "    if (ksu_late_loaded && !new_status->enforcing) {\n"
+    "        // In late_load mode, we may be loaded when selinux was set to permissive\n"
+    "        // So we need to modify the sequence value\n"
+    "        // We assume that setenforce 0 is just called once\n"
+    "        new_status->enforcing = 1;\n"
+    "        new_status->sequence = new_status->policyload ? 4 : 0;\n"
+    "    }\n"
+    "    if (!new_status->policyload)\n"
+    "        new_status->policyload = 1;\n"
+    "    if (!new_status->sequence)\n"
+    "        new_status->sequence = 2;",
+)
+
 # susfs 的 avc.c 补丁要拿 ksu 域和 priv_app 域的 sid 做 AVC 日志伪装。
 # 这两个变量 SukiSU 侧没有，按 10_enable_susfs_for_ksu.patch 的原实现补齐，
 # 并在策略加载完成后（apply_kernelsu_rules 末尾）解析一次。
@@ -617,8 +659,75 @@ replace(
     "extern bool ksu_selinux_hide_running __read_mostly;\n"
     "extern bool ksu_selinux_hide_enabled __read_mostly;\n"
     "extern void initialize_fake_status(void);\n"
+    "static bool susfs_selinux_hide_for_current_app(void);\n"
+    "static void susfs_fix_fake_status_page(void);\n"
     "static int susfs_read_backup_policy(void **data, size_t *len);\n"
     "#endif // #ifdef CONFIG_KSU_SUSFS",
+)
+
+append_once("common/security/selinux/selinuxfs.c", "susfs_selinux_hide_for_current_app_def", r'''
+#ifdef CONFIG_KSU_SUSFS
+/* susfs_selinux_hide_for_current_app_def */
+static bool susfs_selinux_hide_for_current_app(void)
+{
+    return current_uid().val >= 10000 && backup_sepolicy && ksu_selinux_hide_running;
+}
+
+static void susfs_fix_fake_status_page(void)
+{
+    struct selinux_kernel_status *status;
+
+    mutex_lock(&selinux_state.status_lock);
+    if (fake_status) {
+        status = page_address(fake_status);
+        if (!status->policyload)
+            status->policyload = 1;
+        if (!status->sequence)
+            status->sequence = 2;
+        if (!status->enforcing)
+            status->enforcing = 1;
+    }
+    mutex_unlock(&selinux_state.status_lock);
+}
+#endif
+''')
+
+# susfs4oki 原始 status 包装只看 ksu_selinux_hide_enabled，且 fake_status 尚未初始化时
+# 会让第一次普通 App 打开落回 live status。这里统一改用同一个 App 视图 gate，
+# 并在返回 fake page 前补齐 sequence/policyload，避免暴露 0/0 指纹。
+replace(
+    "common/security/selinux/selinuxfs.c",
+    "\tif (likely(current_uid().val >= 10000 && ksu_selinux_hide_enabled)) {\n"
+    "\t\tmutex_lock(&selinux_state.status_lock);\n"
+    "\t\tdata = fake_status;\n"
+    "\t\tmutex_unlock(&selinux_state.status_lock);\n"
+    "\t\tif (data) {\n"
+    "\t\t\tfilp->private_data = data;\n"
+    "\t\t\treturn 0;\n"
+    "\t\t}\n"
+    "\t}\n"
+    "\n"
+    "\tret = sel_open_handle_status(inode, filp);\n"
+    "\tif (static_branch_unlikely(&fake_status_initialize_key) && !ret && !fake_status)\n"
+    "\t\tinitialize_fake_status();\n"
+    "\treturn ret;",
+    "\tif (likely(susfs_selinux_hide_for_current_app())) {\n"
+    "\t\tif (!fake_status)\n"
+    "\t\t\tinitialize_fake_status();\n"
+    "\t\tsusfs_fix_fake_status_page();\n"
+    "\t\tmutex_lock(&selinux_state.status_lock);\n"
+    "\t\tdata = fake_status;\n"
+    "\t\tmutex_unlock(&selinux_state.status_lock);\n"
+    "\t\tif (data) {\n"
+    "\t\t\tfilp->private_data = data;\n"
+    "\t\t\treturn 0;\n"
+    "\t\t}\n"
+    "\t}\n"
+    "\n"
+    "\tret = sel_open_handle_status(inode, filp);\n"
+    "\tif (static_branch_unlikely(&fake_status_initialize_key) && !ret && !fake_status)\n"
+    "\t\tinitialize_fake_status();\n"
+    "\treturn ret;",
 )
 
 append_once("common/security/selinux/selinuxfs.c", "susfs_read_backup_policy_def", r'''
@@ -660,13 +769,59 @@ replace(
     "\tif (rc)\n"
     "\t\tgoto err;",
     "#ifdef CONFIG_KSU_SUSFS\n"
-    "\tif (likely(current_uid().val >= 10000 && ksu_selinux_hide_running && backup_sepolicy))\n"
+    "\tif (likely(susfs_selinux_hide_for_current_app()))\n"
     "\t\trc = susfs_read_backup_policy(&plm->data, &plm->len);\n"
     "\telse\n"
     "#endif\n"
     "\t\trc = security_read_policy(state, &plm->data, &plm->len);\n"
     "\tif (rc)\n"
     "\t\tgoto err;",
+)
+
+# SELinux policy/status 隐藏之外，/proc/config.gz 也会直接暴露真实 .config。
+# 这里只改 kernel/Makefile 的 config_data 产物生成规则：真实 out/.config 不变，
+# 只让运行时 /proc/config.gz 的展示副本按 KERNEL_CONFIG_SPOOF 做伪装。
+replace(
+    "common/kernel/Makefile",
+    "filechk_cat = cat $<\n\n$(obj)/config_data: $(KCONFIG_CONFIG) FORCE\n\t$(call filechk,cat)",
+    r'''filechk_cat = cat $<
+
+# 伪装 /proc/config.gz 的显示内容。KERNEL_CONFIG_SPOOF 形如
+# "CONFIG_KSU=unset CONFIG_KPM=unset"，变量为空时产物保持原样。
+define config_spoof
+	if [ -n "$(KERNEL_CONFIG_SPOOF)" ]; then \
+		echo "  CONFIG_SPOOF  $@"; \
+		for rule in $(KERNEL_CONFIG_SPOOF); do \
+			sym="$${rule%%=*}"; val="$${rule#*=}"; \
+			if [ "$$val" = "n" ] || [ "$$val" = "unset" ]; then \
+				repl="# $$sym is not set"; \
+			else \
+				repl="$$sym=$$val"; \
+			fi; \
+			if grep -q "^$$sym=" $@; then \
+				cur="$$(grep -m1 "^$$sym=" $@)"; \
+				sed -i "s|^$$sym=.*|$$repl|" $@; \
+				echo "    $$cur  ->  $$repl"; \
+			elif grep -q "^# $$sym is not set" $@; then \
+				echo "    $$sym 本就未设置，跳过"; \
+			else \
+				echo "    警告: $$sym 不在 config_data 中，跳过"; \
+			fi; \
+		done; \
+		for rule in $(KERNEL_CONFIG_SPOOF); do \
+			sym="$${rule%%=*}"; val="$${rule#*=}"; \
+			if [ "$$val" != "n" ] && [ "$$val" != "unset" ]; then continue; fi; \
+			if grep -q "^$$sym=" $@; then \
+				echo "    错误: $$sym 未能隐藏，config_data 里仍是 $$(grep -m1 "^$$sym=" $@)"; \
+				exit 1; \
+			fi; \
+		done; \
+	fi
+endef
+
+$(obj)/config_data: $(KCONFIG_CONFIG) FORCE
+	$(call filechk,cat)
+	$(Q)$(config_spoof)''',
 )
 
 # =============================================================================

@@ -582,19 +582,42 @@ jobs:
             grep -qF 'extern u32 susfs_ksu_sid;' KernelSU/kernel/selinux/selinux.h || {
               echo "错误：selinux.h 未声明 susfs_ksu_sid"; exit 1; }
 
-            # 8. SukiSU 原生 selinux_hide 只处理 context/access/status；检测器直接读
-            #    /sys/fs/selinux/policy 仍会看到 live policy 里的 ksu/ksu_file 规则。
-            #    新 flow 必须让普通 App 在 selinux_hide 已运行时读取 backup_sepolicy。
+            # 8. SukiSU 原生 selinux_hide 的 context/access/status 与本 flow 新补的
+            #    /sys/fs/selinux/policy 必须使用同一个普通 App 隐藏视图，避免出现
+            #    status 已 fake、policy 仍 live 的矛盾结果。
             grep -qF 'extern struct selinux_policy *backup_sepolicy;' common/security/selinux/selinuxfs.c || {
               echo "错误：selinuxfs.c 未声明 backup_sepolicy，无法向普通 App 返回原始 SELinux policy"; exit 1; }
+            grep -qF 'static bool susfs_selinux_hide_for_current_app(void)' common/security/selinux/selinuxfs.c || {
+              echo "错误：selinuxfs.c 未注入普通 App SELinux 隐藏统一门控"; exit 1; }
+            grep -qF 'current_uid().val >= 10000 && backup_sepolicy && ksu_selinux_hide_running' common/security/selinux/selinuxfs.c || {
+              echo "错误：SELinux 隐藏门控未限制为普通 App + backup_sepolicy + running 状态"; exit 1; }
+            grep -qF 'static void susfs_fix_fake_status_page(void)' common/security/selinux/selinuxfs.c || {
+              echo "错误：selinuxfs.c 未注入 fake status 修正函数"; exit 1; }
+            grep -qF 'status->policyload = 1;' common/security/selinux/selinuxfs.c || {
+              echo "错误：fake status 未修正 policyload=0 指纹"; exit 1; }
+            grep -qF 'status->sequence = 2;' common/security/selinux/selinuxfs.c || {
+              echo "错误：fake status 未修正 sequence=0 指纹"; exit 1; }
+            grep -qF 'susfs_fix_fake_status_page();' common/security/selinux/selinuxfs.c || {
+              echo "错误：status open 路径未刷新 fake status"; exit 1; }
             grep -qF 'static int susfs_read_backup_policy(void **data, size_t *len)' common/security/selinux/selinuxfs.c || {
               echo "错误：selinuxfs.c 未注入 backup_sepolicy 导出函数"; exit 1; }
-            grep -qF 'current_uid().val >= 10000 && ksu_selinux_hide_running && backup_sepolicy' common/security/selinux/selinuxfs.c || {
-              echo "错误：/sys/fs/selinux/policy 未按普通 App UID 和 selinux_hide 运行状态做隐藏门控"; exit 1; }
+            if [[ "$(grep -cF 'if (likely(susfs_selinux_hide_for_current_app()))' common/security/selinux/selinuxfs.c)" -lt 2 ]]; then
+              echo "错误：/sys/fs/selinux/policy 和 status 未同时使用统一隐藏门控"; exit 1;
+            fi
             grep -qF 'rc = susfs_read_backup_policy(&plm->data, &plm->len);' common/security/selinux/selinuxfs.c || {
               echo "错误：/sys/fs/selinux/policy 未切换到 backup_sepolicy 快照"; exit 1; }
+            grep -qF 'ksu_selinux_hide_enabled = false;' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：selinux_hide 启用失败时未回滚 enabled 状态"; exit 1; }
+            grep -qF 'new_status->policyload = 1;' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：SukiSU fake status 未修正 policyload=0 指纹"; exit 1; }
+            grep -qF 'new_status->sequence = 2;' KernelSU/kernel/feature/selinux_hide.c || {
+              echo "错误：SukiSU fake status 未修正 sequence=0 指纹"; exit 1; }
+            grep -qF 'define config_spoof' common/kernel/Makefile || {
+              echo "错误：kernel/Makefile 未注入 config_data 伪装逻辑"; exit 1; }
+            grep -qF 'KERNEL_CONFIG_SPOOF' common/kernel/Makefile || {
+              echo "错误：kernel/Makefile 未支持 KERNEL_CONFIG_SPOOF"; exit 1; }
 
-            echo "自检通过：两套 ABI 各自独立，SukiSU 原生授权入口未被接管，selinux 符号可见性与 policy 直读隐藏已补齐。"
+            echo "自检通过：两套 ABI 各自独立，SELinux policy/status 隐藏和 config_data 伪装均已补齐。"
           fi
 
       - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
@@ -902,8 +925,27 @@ jobs:
             done
           fi
 
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" Image
+          KERNEL_CONFIG_SPOOF_VALUE="CONFIG_KSU=unset CONFIG_KPM=unset CONFIG_KSU_MANUAL_HOOK=unset CONFIG_KSU_SUSFS=unset CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=unset CONFIG_KSU_SUSFS_SUS_PATH=unset CONFIG_KSU_SUSFS_SUS_MOUNT=unset CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=unset CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=unset CONFIG_KSU_SUSFS_SUS_KSTAT=unset CONFIG_KSU_SUSFS_TRY_UMOUNT=unset CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=unset CONFIG_KSU_SUSFS_SPOOF_UNAME=unset CONFIG_KSU_SUSFS_ENABLE_LOG=unset CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=unset CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=unset CONFIG_KSU_SUSFS_OPEN_REDIRECT=unset CONFIG_KSU_SUSFS_SUS_MAP=unset CONFIG_KSU_SUSFS_SUS_SU=unset CONFIG_KALLSYMS_ALL=unset CONFIG_IP6_NF_NAT=n"
+          KERNEL_CONFIG_SPOOF_ARGS=()
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            KERNEL_CONFIG_SPOOF_ARGS+=(KERNEL_CONFIG_SPOOF="$KERNEL_CONFIG_SPOOF_VALUE")
+            echo "====== /proc/config.gz 展示伪装列表 ======"
+            printf '%s\n' "$KERNEL_CONFIG_SPOOF_VALUE" | tr ' ' '\n'
+          fi
+
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error "${KSU_MAKE_ARGS[@]}" "${KERNEL_CONFIG_SPOOF_ARGS[@]}" Image
           test -f out/arch/arm64/boot/Image
+
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            echo "====== Image 内嵌 config 展示面自检 ======"
+            bash scripts/extract-ikconfig out/arch/arm64/boot/Image > out/image.config
+            for cfg in CONFIG_KSU CONFIG_KPM CONFIG_KSU_MANUAL_HOOK CONFIG_KSU_SUSFS CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG; do
+              ! grep -q "^${cfg}=y" out/image.config || { echo "错误：Image 内嵌 config 仍暴露 ${cfg}=y"; exit 1; }
+              grep -q "^# ${cfg} is not set" out/image.config || { echo "错误：Image 内嵌 config 未把 ${cfg} 伪装成未启用"; exit 1; }
+            done
+            echo "Image 内嵌 config 自检通过：root/SUSFS/KPM 关键配置不再以 =y 暴露。"
+          fi
+
           echo "内核编译完成。"
           ccache -s
           df -h
